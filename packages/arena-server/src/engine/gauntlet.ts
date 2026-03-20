@@ -1,5 +1,13 @@
 import { sql } from 'kysely';
 import { getDb } from '../db/connection.js';
+import {
+  scheduleGauntletActivation,
+  scheduleGauntletSettlement,
+  startIndexingParticipant,
+  stopIndexingParticipant,
+} from './indexer.js';
+import { scheduleRewardProcessing } from '../rewards/distributor.js';
+import { env } from '../config.js';
 
 export class GauntletError extends Error {
   constructor(public code: string, message?: string) {
@@ -47,6 +55,12 @@ export async function createGauntlet(input: CreateGauntletInput) {
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+
+  // Schedule activation when registration ends
+  const redisUrl = env.REDIS_URL;
+  await scheduleGauntletActivation(redisUrl, competition.id, registrationEnd);
+  // Schedule settlement when competition ends
+  await scheduleGauntletSettlement(redisUrl, competition.id, endTime);
 
   return competition;
 }
@@ -154,6 +168,19 @@ export async function activateGauntlet(competitionId: string) {
       .where('id', '=', competitionId)
       .execute();
 
+    // Start indexing for all registered participants
+    const participants = await trx
+      .selectFrom('arena_participants')
+      .where('competition_id', '=', competitionId)
+      .where('status', '=', 'active')
+      .select('user_pubkey')
+      .execute();
+
+    const redisUrl = env.REDIS_URL;
+    for (const p of participants) {
+      await startIndexingParticipant(redisUrl, competitionId, p.user_pubkey);
+    }
+
     return { participantCount: Number(count) };
   });
 }
@@ -238,6 +265,12 @@ export async function settleGauntlet(competitionId: string) {
       .where('id', '=', competitionId)
       .execute();
 
+    // Stop indexing for all participants
+    const redisUrl = env.REDIS_URL;
+    for (const p of participants) {
+      await stopIndexingParticipant(redisUrl, competitionId, p.user_pubkey);
+    }
+
     // Award top 3 with Mutagen bonuses
     const rewards = [100, 60, 30]; // Mutagen amounts
     for (let i = 0; i < Math.min(3, activeParticipants.length); i++) {
@@ -252,6 +285,9 @@ export async function settleGauntlet(competitionId: string) {
         })
         .execute();
     }
+
+    // Schedule reward processing
+    await scheduleRewardProcessing(redisUrl, competitionId);
 
     return {
       rankings: activeParticipants.map((p, i) => ({
