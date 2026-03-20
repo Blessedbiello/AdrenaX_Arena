@@ -73,8 +73,35 @@ export function startIndexerWorker(redisUrl: string): Worker {
   indexerWorker = new Worker(
     QUEUE_NAME,
     async (job: Job) => {
-      const { competitionId, userPubkey } = job.data;
-      await indexParticipantPositions(competitionId, userPubkey);
+      switch (job.name) {
+        case 'settle-duel': {
+          const { duelId } = job.data;
+          const { settleDuel } = await import('./duel.js');
+          console.log(`[Worker] Settling duel ${duelId}`);
+          await settleDuel(duelId);
+          break;
+        }
+        case 'activate-gauntlet': {
+          const { competitionId } = job.data;
+          const { activateGauntlet } = await import('./gauntlet.js');
+          console.log(`[Worker] Activating gauntlet ${competitionId}`);
+          await activateGauntlet(competitionId);
+          break;
+        }
+        case 'settle-gauntlet': {
+          const { competitionId } = job.data;
+          const { settleGauntlet } = await import('./gauntlet.js');
+          console.log(`[Worker] Settling gauntlet ${competitionId}`);
+          await settleGauntlet(competitionId);
+          break;
+        }
+        case 'index-positions':
+        default: {
+          const { competitionId, userPubkey } = job.data;
+          await indexParticipantPositions(competitionId, userPubkey);
+          break;
+        }
+      }
     },
     {
       connection: opts,
@@ -91,8 +118,23 @@ export function startIndexerWorker(redisUrl: string): Worker {
 }
 
 /**
+ * Calculate adaptive polling interval based on time remaining.
+ * - Last 5 minutes: 10s (high frequency for exciting finishes)
+ * - Last 30 minutes: 15s
+ * - Normal: 30s (default)
+ * - Idle (no trades in last 3 polls): 60s
+ */
+function getAdaptiveInterval(endTime: Date): number {
+  const remaining = endTime.getTime() - Date.now();
+  if (remaining <= 5 * 60_000) return 10_000;    // Last 5 min → 10s
+  if (remaining <= 30 * 60_000) return 15_000;    // Last 30 min → 15s
+  return 30_000;                                   // Default → 30s
+}
+
+/**
  * Index positions for a single participant in a competition.
  * Fetches from Adrena API and upserts into arena_trades.
+ * Dynamically adjusts polling interval based on time remaining.
  */
 async function indexParticipantPositions(
   competitionId: string,
@@ -206,6 +248,30 @@ async function indexParticipantPositions(
       .where('user_pubkey', '=', userPubkey)
       .execute();
   }
+
+  // Adaptive interval: reschedule with different frequency based on time remaining
+  const newInterval = getAdaptiveInterval(endTime);
+  const queue = indexerQueue;
+  if (queue) {
+    const jobId = `index-${competitionId}-${userPubkey}`;
+    // Check if current repeatable job has a different interval
+    const repeatableJobs = await queue.getRepeatableJobs();
+    const currentJob = repeatableJobs.find(j => j.id === jobId);
+    if (currentJob && Number(currentJob.every) !== newInterval) {
+      // Remove old repeatable and add new one with updated interval
+      await queue.removeRepeatableByKey(currentJob.key).catch(() => {});
+      await queue.add(
+        'index-positions',
+        { competitionId, userPubkey },
+        {
+          jobId,
+          repeat: { every: newInterval },
+          removeOnComplete: 100,
+          removeOnFail: 50,
+        }
+      );
+    }
+  }
 }
 
 /**
@@ -224,6 +290,52 @@ export async function scheduleDuelSettlement(
     { duelId },
     {
       jobId: `settle-${duelId}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+  );
+}
+
+/**
+ * Schedule gauntlet activation as a delayed job.
+ */
+export async function scheduleGauntletActivation(
+  redisUrl: string,
+  competitionId: string,
+  activateAt: Date
+): Promise<void> {
+  const queue = getIndexerQueue(redisUrl);
+  const delay = Math.max(0, activateAt.getTime() - Date.now());
+
+  await queue.add(
+    'activate-gauntlet',
+    { competitionId },
+    {
+      jobId: `activate-gauntlet-${competitionId}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+  );
+}
+
+/**
+ * Schedule gauntlet settlement as a delayed job.
+ */
+export async function scheduleGauntletSettlement(
+  redisUrl: string,
+  competitionId: string,
+  settleAt: Date
+): Promise<void> {
+  const queue = getIndexerQueue(redisUrl);
+  const delay = Math.max(0, settleAt.getTime() - Date.now());
+
+  await queue.add(
+    'settle-gauntlet',
+    { competitionId },
+    {
+      jobId: `settle-gauntlet-${competitionId}`,
       delay,
       removeOnComplete: true,
       removeOnFail: false,

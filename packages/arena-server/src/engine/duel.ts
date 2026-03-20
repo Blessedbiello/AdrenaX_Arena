@@ -1,6 +1,9 @@
 import { sql } from 'kysely';
 import { getDb } from '../db/connection.js';
 import type { DB } from '../db/types.js';
+import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
+import { scheduleRewardProcessing } from '../rewards/distributor.js';
+import { env } from '../config.js';
 
 export class DuelError extends Error {
   constructor(public code: string, message?: string) {
@@ -166,6 +169,14 @@ export async function acceptDuel(duelId: string, defenderWallet: string) {
       })
       .execute();
 
+    // Schedule position indexing for both participants
+    const redisUrl = env.REDIS_URL;
+    await startIndexingParticipant(redisUrl, duel.competition_id, duel.challenger_pubkey);
+    await startIndexingParticipant(redisUrl, duel.competition_id, defenderWallet);
+
+    // Schedule settlement when the duel ends
+    await scheduleDuelSettlement(redisUrl, duelId, endTime);
+
     return { duel: updatedDuel, startTime: now, endTime };
   });
 }
@@ -300,6 +311,34 @@ export async function settleDuel(duelId: string) {
         .execute();
     }
 
+    // Create Mutagen rewards for honor duels
+    if (duel.is_honor_duel && result.winner) {
+      await trx
+        .insertInto('arena_rewards')
+        .values({
+          competition_id: duel.competition_id,
+          user_pubkey: result.winner,
+          amount: 50,
+          token: 'MUTAGEN',
+          reward_type: 'mutagen_bonus',
+        })
+        .execute();
+    }
+
+    // Stop indexing both participants
+    const redisUrl = env.REDIS_URL;
+    await import('./indexer.js').then(m => {
+      return Promise.all([
+        m.stopIndexingParticipant(redisUrl, duel.competition_id, duel.challenger_pubkey),
+        duel.defender_pubkey
+          ? m.stopIndexingParticipant(redisUrl, duel.competition_id, duel.defender_pubkey)
+          : Promise.resolve(),
+      ]);
+    });
+
+    // Schedule reward processing
+    await scheduleRewardProcessing(redisUrl, duel.competition_id);
+
     // Settle predictions
     if (result.winner) {
       await trx
@@ -362,19 +401,25 @@ export async function getDuelDetails(duelId: string) {
 
   if (!duel) return null;
 
-  const participants = await db
-    .selectFrom('arena_participants')
-    .where('competition_id', '=', duel.competition_id)
-    .selectAll()
-    .execute();
+  const [participants, predictions, competition] = await Promise.all([
+    db
+      .selectFrom('arena_participants')
+      .where('competition_id', '=', duel.competition_id)
+      .selectAll()
+      .execute(),
+    db
+      .selectFrom('arena_predictions')
+      .where('duel_id', '=', duelId)
+      .selectAll()
+      .execute(),
+    db
+      .selectFrom('arena_competitions')
+      .where('id', '=', duel.competition_id)
+      .select(['start_time', 'end_time'])
+      .executeTakeFirst(),
+  ]);
 
-  const predictions = await db
-    .selectFrom('arena_predictions')
-    .where('duel_id', '=', duelId)
-    .selectAll()
-    .execute();
-
-  return { duel, participants, predictions };
+  return { duel, participants, predictions, competition };
 }
 
 // ── Helpers ──
