@@ -8,7 +8,7 @@ export const userRouter = Router();
 
 // Get nonce for wallet authentication
 userRouter.get('/nonce/:wallet', async (req: Request, res: Response) => {
-  const wallet = req.params.wallet;
+  const wallet = req.params.wallet as string;
   if (wallet.length < 32 || wallet.length > 44) {
     res.status(400).json({ success: false, error: 'INVALID_WALLET' });
     return;

@@ -29,17 +29,17 @@ export interface ArenaParticipantsTable {
   id: Generated<string>;
   competition_id: string;
   user_pubkey: string;
-  team_id: string | null;
+  team_id: ColumnType<string | null, string | null | undefined, string | null>;
   status: 'active' | 'eliminated' | 'withdrawn' | 'winner' | 'forfeited';
-  eliminated_round: number | null;
-  pnl_usd: ColumnType<number, number | string, number | string>;
-  roi_percent: ColumnType<number, number | string, number | string>;
-  total_volume_usd: ColumnType<number, number | string, number | string>;
-  positions_closed: number;
-  win_rate: ColumnType<number, number | string, number | string>;
-  arena_score: ColumnType<number, number | string, number | string>;
-  last_indexed_at: ColumnType<Date | null, string | Date | null, string | Date | null>;
-  cursor_position_id: number | null;
+  eliminated_round: ColumnType<number | null, number | null | undefined, number | null>;
+  pnl_usd: ColumnType<number, number | string | undefined, number | string>;
+  roi_percent: ColumnType<number, number | string | undefined, number | string>;
+  total_volume_usd: ColumnType<number, number | string | undefined, number | string>;
+  positions_closed: ColumnType<number, number | undefined, number>;
+  win_rate: ColumnType<number, number | string | undefined, number | string>;
+  arena_score: ColumnType<number, number | string | undefined, number | string>;
+  last_indexed_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+  cursor_position_id: ColumnType<number | null, number | null | undefined, number | null>;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -94,7 +94,7 @@ export interface ArenaPredictionsTable {
   predicted_winner: string;
   prediction_locked_at: Generated<Date>;
   is_correct: boolean | null;
-  mutagen_reward: ColumnType<number, number | string, number | string>;
+  mutagen_reward: ColumnType<number, number | string | undefined, number | string>;
 }
 
 // ── Arena Round Snapshots ──

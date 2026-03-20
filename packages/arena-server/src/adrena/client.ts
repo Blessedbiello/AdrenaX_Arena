@@ -199,7 +199,7 @@ export class AdrenaClient {
     if (opts.status) params.set('status', opts.status);
 
     return withRetry(
-      () => this.fetch(`/position?${params}`, PositionListSchema).then(r => r.data),
+      () => this.fetch(`/position?${params}`, PositionListSchema).then(r => r.data as AdrenaPosition[]),
       { retries: 3, baseMs: 1000 }
     );
   }

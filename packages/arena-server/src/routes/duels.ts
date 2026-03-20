@@ -58,7 +58,7 @@ duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
 duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) => {
   try {
     const wallet = (req as any).wallet as string;
-    const duelId = req.params.id;
+    const duelId = req.params.id as string;
 
     const result = await acceptDuel(duelId, wallet);
 
@@ -84,7 +84,7 @@ duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) 
 // Get duel details
 duelRouter.get('/:id', async (req: Request, res: Response) => {
   try {
-    const result = await getDuelDetails(req.params.id);
+    const result = await getDuelDetails(req.params.id as string);
     if (!result) {
       res.status(404).json({ success: false, error: 'DUEL_NOT_FOUND' });
       return;
@@ -146,7 +146,7 @@ duelRouter.get('/', async (req: Request, res: Response) => {
 
 // SSE stream for duel updates
 duelRouter.get('/:id/stream', async (req: Request, res: Response) => {
-  const duelId = req.params.id;
+  const duelId = req.params.id as string;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -193,7 +193,7 @@ const PredictionSchema = z.object({
 duelRouter.post('/:id/predict', requireAuth, async (req: Request, res: Response) => {
   try {
     const wallet = (req as any).wallet as string;
-    const duelId = req.params.id;
+    const duelId = req.params.id as string;
     const { predictedWinner } = PredictionSchema.parse(req.body);
 
     const db = getDb();

@@ -46,9 +46,10 @@ competitionRouter.get('/', async (req: Request, res: Response) => {
 competitionRouter.get('/:id', async (req: Request, res: Response) => {
   try {
     const db = getDb();
+    const competitionId = req.params.id as string;
     const competition = await db
       .selectFrom('arena_competitions')
-      .where('id', '=', req.params.id)
+      .where('id', '=', competitionId)
       .selectAll()
       .executeTakeFirst();
 
@@ -59,7 +60,7 @@ competitionRouter.get('/:id', async (req: Request, res: Response) => {
 
     const participants = await db
       .selectFrom('arena_participants')
-      .where('competition_id', '=', req.params.id)
+      .where('competition_id', '=', competitionId)
       .orderBy('roi_percent', 'desc')
       .selectAll()
       .execute();
@@ -73,7 +74,7 @@ competitionRouter.get('/:id', async (req: Request, res: Response) => {
 
 // SSE leaderboard stream
 competitionRouter.get('/:id/stream', async (req: Request, res: Response) => {
-  const competitionId = req.params.id;
+  const competitionId = req.params.id as string;
 
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -129,7 +130,7 @@ competitionRouter.post('/gauntlet', requireAuth, async (req: Request, res: Respo
 competitionRouter.post('/:id/register', requireAuth, async (req: Request, res: Response) => {
   try {
     const wallet = (req as any).wallet as string;
-    const participant = await registerForGauntlet(req.params.id, wallet);
+    const participant = await registerForGauntlet(req.params.id as string, wallet);
     res.status(201).json({ success: true, data: participant });
   } catch (err) {
     if (err instanceof GauntletError) {
