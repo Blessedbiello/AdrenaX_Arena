@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getDb } from '../db/connection.js';
 import { sql } from 'kysely';
 import { generateNonce } from '../middleware/auth.js';
+import { getUserStats } from '../engine/streaks.js';
 
 export const userRouter = Router();
 
@@ -17,11 +18,33 @@ userRouter.get('/nonce/:wallet', async (req: Request, res: Response) => {
   res.json({ success: true, data: { nonce, message: `AdrenaX Arena Authentication\nNonce: ${nonce}` } });
 });
 
+// Get user streak stats
+userRouter.get('/:wallet/streak', async (req: Request, res: Response) => {
+  try {
+    const stats = await getUserStats(req.params.wallet as string);
+    res.json({
+      success: true,
+      data: stats || {
+        current_streak: 0,
+        best_streak: 0,
+        streak_type: 'none',
+        total_wins: 0,
+        total_losses: 0,
+        title: null,
+        mutagen_multiplier: 1.0,
+      },
+    });
+  } catch (err) {
+    console.error('[Users] Streak error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Get user arena profile
 userRouter.get('/:wallet/profile', async (req: Request, res: Response) => {
   try {
     const db = getDb();
-    const wallet = req.params.wallet;
+    const wallet = req.params.wallet as string;
 
     // Duel stats
     const duelStats = await db
@@ -50,6 +73,9 @@ userRouter.get('/:wallet/profile', async (req: Request, res: Response) => {
         sql<number>`COUNT(*) FILTER (WHERE arena_participants.status = 'winner')`.as('gauntlets_won'),
       ])
       .executeTakeFirstOrThrow();
+
+    // Streak stats
+    const streak = await getUserStats(wallet);
 
     // Recent duels
     const recentDuels = await db
@@ -80,6 +106,13 @@ userRouter.get('/:wallet/profile', async (req: Request, res: Response) => {
           won: Number(gauntletStats.gauntlets_won),
         },
         recentDuels,
+        streak: {
+          current: streak?.current_streak ?? 0,
+          best: streak?.best_streak ?? 0,
+          type: streak?.streak_type ?? 'none',
+          title: streak?.title ?? null,
+          multiplier: Number(streak?.mutagen_multiplier ?? 1.0),
+        },
       },
     });
   } catch (err) {

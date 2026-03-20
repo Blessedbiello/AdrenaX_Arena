@@ -3,6 +3,7 @@ import { getDb } from '../db/connection.js';
 import type { DB } from '../db/types.js';
 import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
+import { updateStreaks } from './streaks.js';
 import { env } from '../config.js';
 
 export class DuelError extends Error {
@@ -276,6 +277,9 @@ export async function settleDuel(duelId: string) {
           .where('competition_id', '=', duel.competition_id)
           .where('user_pubkey', '=', loser)
           .execute();
+
+        // Update streak stats
+        await updateStreaks(result.winner, loser);
       }
 
       // Create reward entries for staked duels
@@ -313,14 +317,24 @@ export async function settleDuel(duelId: string) {
         .execute();
     }
 
-    // Create Mutagen rewards for honor duels
+    // Create Mutagen rewards for honor duels (with streak multiplier)
     if (duel.is_honor_duel && result.winner) {
+      // Look up winner's streak multiplier
+      const winnerStats = await trx
+        .selectFrom('arena_user_stats')
+        .where('user_pubkey', '=', result.winner)
+        .select('mutagen_multiplier')
+        .executeTakeFirst();
+
+      const multiplier = Number(winnerStats?.mutagen_multiplier ?? 1.0);
+      const mutagenAmount = Math.round(50 * multiplier);
+
       await trx
         .insertInto('arena_rewards')
         .values({
           competition_id: duel.competition_id,
           user_pubkey: result.winner,
-          amount: 50,
+          amount: mutagenAmount,
           token: 'MUTAGEN',
           reward_type: 'mutagen_bonus',
         })
