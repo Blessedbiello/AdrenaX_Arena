@@ -9,7 +9,7 @@ export const duelRouter = Router();
 
 // Create a duel challenge
 const CreateDuelSchema = z.object({
-  defenderPubkey: z.string().min(32).max(44),
+  defenderPubkey: z.string().min(32).max(44).optional(),
   assetSymbol: z.enum(['SOL', 'BTC', 'ETH', 'BONK', 'JTO', 'JITOSOL']),
   durationHours: z.union([z.literal(24), z.literal(48)]),
   stakeAmount: z.number().min(0).optional().default(0),
@@ -39,7 +39,7 @@ duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
         duelId: result.duel.id,
         competitionId: result.competition.id,
         challengerPubkey: wallet,
-        defenderPubkey: input.defenderPubkey,
+        defenderPubkey: input.defenderPubkey ?? '',
         assetSymbol: input.assetSymbol,
         durationHours: input.durationHours,
         isHonorDuel: input.isHonorDuel,
@@ -131,6 +131,7 @@ const ListDuelsSchema = z.object({
   status: z.enum(['pending', 'accepted', 'active', 'settling', 'completed', 'expired', 'cancelled']).optional(),
   wallet: z.string().optional(),
   asset: z.string().optional(),
+  type: z.enum(['open', 'direct', 'all']).optional().default('all'),
   limit: z.coerce.number().min(1).max(100).optional().default(20),
   offset: z.coerce.number().min(0).optional().default(0),
 });
@@ -160,6 +161,11 @@ duelRouter.get('/', async (req: Request, res: Response) => {
     }
     if (filters.asset) {
       query = query.where('asset_symbol', '=', filters.asset);
+    }
+    if (filters.type === 'open') {
+      query = query.where('defender_pubkey', 'is', null).where('status', '=', 'pending');
+    } else if (filters.type === 'direct') {
+      query = query.where('defender_pubkey', 'is not', null);
     }
 
     const duels = await query.execute();

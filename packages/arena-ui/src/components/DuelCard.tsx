@@ -52,8 +52,15 @@ export default function DuelCard({ duel }: { duel: Duel }) {
           <div className="text-center">
             <div className="text-xs text-arena-muted mb-1">Defender</div>
             <div className="font-mono text-sm">
-              {duel.defender_pubkey ? shortenPubkey(duel.defender_pubkey) : 'Awaiting...'}
+              {duel.defender_pubkey
+                ? shortenPubkey(duel.defender_pubkey)
+                : duel.status === 'pending'
+                  ? <span className="text-arena-accent font-bold">OPEN</span>
+                  : 'Awaiting...'}
             </div>
+            {!duel.defender_pubkey && duel.status === 'pending' && (
+              <div className="text-xs text-arena-accent mt-1">Anyone can accept</div>
+            )}
             {duel.defender_roi != null && (
               <div className={`text-sm font-bold mt-1 ${duel.defender_roi >= 0 ? 'text-arena-accent' : 'text-arena-red'}`}>
                 {duel.defender_roi >= 0 ? '+' : ''}{duel.defender_roi.toFixed(2)}%

@@ -40,11 +40,12 @@ class ArenaAPI {
   }
 
   // Duels
-  async listDuels(params?: { status?: string; wallet?: string; asset?: string; limit?: number }): Promise<Duel[]> {
+  async listDuels(params?: { status?: string; wallet?: string; asset?: string; type?: 'open' | 'direct' | 'all'; limit?: number }): Promise<Duel[]> {
     const search = new URLSearchParams();
     if (params?.status) search.set('status', params.status);
     if (params?.wallet) search.set('wallet', params.wallet);
     if (params?.asset) search.set('asset', params.asset);
+    if (params?.type) search.set('type', params.type);
     if (params?.limit) search.set('limit', String(params.limit));
     const qs = search.toString();
     return this.fetch(`/api/arena/duels${qs ? `?${qs}` : ''}`);

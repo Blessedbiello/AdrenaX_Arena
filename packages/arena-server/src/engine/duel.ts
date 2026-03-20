@@ -14,7 +14,7 @@ export class DuelError extends Error {
 
 export interface CreateDuelInput {
   challengerPubkey: string;
-  defenderPubkey: string;
+  defenderPubkey?: string;
   assetSymbol: string;
   durationHours: 24 | 48;
   stakeAmount?: number;
@@ -38,12 +38,14 @@ export async function createDuel(input: CreateDuelInput) {
     isHonorDuel = false,
   } = input;
 
-  if (challengerPubkey === defenderPubkey) {
+  if (defenderPubkey && challengerPubkey === defenderPubkey) {
     throw new DuelError('CANNOT_SELF_DUEL', 'Cannot challenge yourself');
   }
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour to accept
+  // Open challenges get 24 hours to accept, direct challenges get 1 hour
+  const expiresMs = defenderPubkey ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+  const expiresAt = new Date(now.getTime() + expiresMs);
 
   return db.transaction().execute(async (trx) => {
     // Create the parent competition
@@ -67,7 +69,7 @@ export async function createDuel(input: CreateDuelInput) {
       .values({
         competition_id: competition.id,
         challenger_pubkey: challengerPubkey,
-        defender_pubkey: defenderPubkey,
+        defender_pubkey: defenderPubkey ?? null,
         asset_symbol: assetSymbol,
         stake_amount: stakeAmount,
         stake_token: stakeToken,

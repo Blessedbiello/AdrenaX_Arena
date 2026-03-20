@@ -12,6 +12,7 @@ export default function ArenaHub() {
   const { walletAddress, connected } = useWalletAuth();
   const { setVisible } = useWalletModal();
   const [activeDuels, setActiveDuels] = useState<Duel[]>([]);
+  const [openChallenges, setOpenChallenges] = useState<Duel[]>([]);
   const [recentDuels, setRecentDuels] = useState<Duel[]>([]);
   const [gauntlets, setGauntlets] = useState<Competition[]>([]);
   const [loading, setLoading] = useState(true);
@@ -19,12 +20,14 @@ export default function ArenaHub() {
   useEffect(() => {
     async function load() {
       try {
-        const [active, recent, comps] = await Promise.all([
+        const [active, open, recent, comps] = await Promise.all([
           api.listDuels({ status: 'active', limit: 6 }),
+          api.listDuels({ type: 'open', limit: 6 }),
           api.listDuels({ status: 'completed', limit: 6 }),
           api.listCompetitions({ mode: 'gauntlet', status: 'active' }),
         ]);
         setActiveDuels(active);
+        setOpenChallenges(open);
         setRecentDuels(recent);
         setGauntlets(comps);
       } catch (err) {
@@ -90,6 +93,23 @@ export default function ArenaHub() {
           <div className="text-center py-20 text-arena-muted">Loading arena data...</div>
         ) : (
           <>
+            {/* Open Challenges */}
+            {openChallenges.length > 0 && (
+              <section className="mb-10">
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-xl font-bold">Open Challenges</h2>
+                  <Link href="/arena/duels?type=open" className="text-arena-accent text-sm hover:underline">
+                    View all
+                  </Link>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {openChallenges.map(duel => (
+                    <DuelCard key={duel.id} duel={duel} />
+                  ))}
+                </div>
+              </section>
+            )}
+
             {/* Active Duels */}
             <section className="mb-10">
               <div className="flex justify-between items-center mb-4">

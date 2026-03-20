@@ -105,7 +105,7 @@ export interface ApiResponse<T> {
 }
 
 export interface CreateDuelInput {
-  defenderPubkey: string;
+  defenderPubkey?: string;
   assetSymbol: string;
   durationHours: 24 | 48;
   stakeAmount?: number;

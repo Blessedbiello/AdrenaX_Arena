@@ -23,6 +23,7 @@ export default function DuelsPage() {
   const [createdDuel, setCreatedDuel] = useState<Duel | null>(null);
 
   // Create form state
+  const [isOpenChallenge, setIsOpenChallenge] = useState(false);
   const [defenderPubkey, setDefenderPubkey] = useState('');
   const [assetSymbol, setAssetSymbol] = useState<string>('SOL');
   const [durationHours, setDurationHours] = useState<24 | 48>(24);
@@ -49,7 +50,7 @@ export default function DuelsPage() {
   }
 
   async function handleCreate() {
-    if (!defenderPubkey) return;
+    if (!isOpenChallenge && !defenderPubkey) return;
 
     if (!connected) {
       setVisible(true);
@@ -66,7 +67,7 @@ export default function DuelsPage() {
       }
 
       const result = await api.createDuel({
-        defenderPubkey,
+        defenderPubkey: isOpenChallenge ? undefined : defenderPubkey,
         assetSymbol,
         durationHours,
         isHonorDuel,
@@ -103,17 +104,41 @@ export default function DuelsPage() {
         {showCreate && !createdDuel && (
           <div className="bg-arena-card border border-arena-border rounded-2xl p-6 mb-8">
             <h2 className="text-lg font-bold mb-4">Create a Challenge</h2>
+            <div className="flex gap-2 mb-4">
+              <button
+                onClick={() => setIsOpenChallenge(false)}
+                className={`px-4 py-2 rounded-lg border transition-colors ${
+                  !isOpenChallenge
+                    ? 'border-arena-accent bg-arena-accent/10 text-arena-accent'
+                    : 'border-arena-border text-arena-muted hover:border-arena-accent/50'
+                }`}
+              >
+                Direct Challenge
+              </button>
+              <button
+                onClick={() => setIsOpenChallenge(true)}
+                className={`px-4 py-2 rounded-lg border transition-colors ${
+                  isOpenChallenge
+                    ? 'border-arena-accent bg-arena-accent/10 text-arena-accent'
+                    : 'border-arena-border text-arena-muted hover:border-arena-accent/50'
+                }`}
+              >
+                Open Challenge
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-arena-muted mb-1">Opponent Wallet</label>
-                <input
-                  type="text"
-                  value={defenderPubkey}
-                  onChange={e => setDefenderPubkey(e.target.value)}
-                  placeholder="Paste Solana wallet address"
-                  className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-2 text-arena-text focus:border-arena-accent outline-none"
-                />
-              </div>
+              {!isOpenChallenge && (
+                <div>
+                  <label className="block text-sm text-arena-muted mb-1">Opponent Wallet</label>
+                  <input
+                    type="text"
+                    value={defenderPubkey}
+                    onChange={e => setDefenderPubkey(e.target.value)}
+                    placeholder="Paste Solana wallet address"
+                    className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-2 text-arena-text focus:border-arena-accent outline-none"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-sm text-arena-muted mb-1">Asset</label>
                 <select
@@ -182,7 +207,7 @@ export default function DuelsPage() {
             </div>
             <button
               onClick={handleCreate}
-              disabled={!defenderPubkey || creating || authenticating}
+              disabled={(!isOpenChallenge && !defenderPubkey) || creating || authenticating}
               className="mt-4 w-full bg-arena-accent hover:bg-arena-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-arena-bg font-bold py-3 rounded-lg transition-colors"
             >
               {!connected ? 'Connect Wallet to Challenge' : authenticating ? 'Signing...' : creating ? 'Creating...' : 'Send Challenge'}
