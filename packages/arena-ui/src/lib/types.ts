@@ -24,6 +24,10 @@ export interface DuelDetails {
   duel: Duel;
   participants: Participant[];
   predictions: Prediction[];
+  competition?: {
+    start_time: string;
+    end_time: string;
+  };
 }
 
 export interface Participant {

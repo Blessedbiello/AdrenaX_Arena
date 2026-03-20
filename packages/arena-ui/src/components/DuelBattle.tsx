@@ -29,10 +29,16 @@ export default function DuelBattle({ details }: { details: DuelDetails }) {
             {duel.is_honor_duel ? 'Honor Duel' : `${duel.stake_amount} ${duel.stake_token} Staked`}
           </span>
         </div>
-        {isActive && (
+        {isActive && details.competition?.end_time && (
+          <CountdownTimer
+            targetDate={details.competition.end_time}
+            label="Time Remaining"
+          />
+        )}
+        {duel.status === 'pending' && (
           <CountdownTimer
             targetDate={duel.expires_at}
-            label="Time Remaining"
+            label="Accept Before"
           />
         )}
         {isCompleted && (
