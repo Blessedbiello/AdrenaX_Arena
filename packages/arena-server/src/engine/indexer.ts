@@ -161,7 +161,12 @@ async function indexParticipantPositions(
   try {
     positions = await client.fetchPositions(userPubkey);
   } catch (err) {
-    console.error(`[Indexer] Failed to fetch positions for ${userPubkey}:`, err);
+    console.error(`[Indexer] Failed to fetch positions for ${userPubkey}:`, (err as Error).message);
+    return;
+  }
+
+  if (positions.length === 0) {
+    // No positions yet — normal for new wallets, don't spam logs
     return;
   }
 
@@ -186,8 +191,8 @@ async function indexParticipantPositions(
         side: pos.side,
         entry_price: pos.entry_price ?? null,
         exit_price: pos.exit_price ?? null,
-        entry_size: pos.size ?? null,
-        collateral_usd: pos.collateral_usd ?? pos.collateral_amount ?? null,
+        entry_size: pos.entry_size ?? null,
+        collateral_usd: pos.collateral_amount ?? null,
         pnl_usd: pos.pnl ?? null,
         fees_usd: pos.fees ?? null,
         entry_date: pos.entry_date ? new Date(pos.entry_date) : null,

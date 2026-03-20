@@ -4,21 +4,40 @@ import { z } from 'zod';
 
 export const AdrenaPositionSchema = z.object({
   position_id: z.number(),
-  user_wallet: z.string(),
+  user_id: z.number().optional(),
   symbol: z.string(),
+  token_account_mint: z.string().optional(),
   side: z.enum(['long', 'short']),
-  status: z.enum(['open', 'close', 'liquidated']).default('open'),
+  status: z.enum(['open', 'close', 'liquidated', 'closing', 'opening']).default('open'),
+  pubkey: z.string().optional(),
   entry_price: z.number().nullable().optional(),
   exit_price: z.number().nullable().optional(),
-  size: z.number().nullable().optional(),
-  collateral_amount: z.number().nullable().optional(),
-  collateral_usd: z.number().nullable().optional(),
+  entry_size: z.number().nullable().optional(),
+  increase_size: z.number().nullable().optional(),
+  exit_size: z.number().nullable().optional(),
   pnl: z.number().nullable().optional(),
-  fees: z.number().nullable().optional(),
+  entry_leverage: z.number().nullable().optional(),
+  lowest_leverage: z.number().nullable().optional(),
   entry_date: z.string().nullable().optional(),
   exit_date: z.string().nullable().optional(),
-  is_liquidated: z.boolean().optional().default(false),
-});
+  fees: z.number().nullable().optional(),
+  borrow_fees: z.number().nullable().optional(),
+  exit_fees: z.number().nullable().optional(),
+  last_ix: z.string().nullable().optional(),
+  entry_collateral_amount: z.number().nullable().optional(),
+  collateral_amount: z.number().nullable().optional(),
+  closed_by_sl_tp: z.boolean().optional(),
+  volume: z.number().nullable().optional(),
+  duration: z.number().nullable().optional(),
+  pnl_volume_ratio: z.number().nullable().optional(),
+  points_pnl_volume_ratio: z.number().nullable().optional(),
+  points_duration: z.number().nullable().optional(),
+  close_size_multiplier: z.number().nullable().optional(),
+  points_mutations: z.number().nullable().optional(),
+  total_points: z.number().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+}).passthrough();
 
 export type AdrenaPosition = z.infer<typeof AdrenaPositionSchema>;
 
@@ -33,12 +52,24 @@ const PositionListSchema = z.object({
   data: z.array(AdrenaPositionSchema),
 });
 
+// Fallback: some endpoints may return array directly
+const PositionArraySchema = z.array(AdrenaPositionSchema);
+
 const PoolStatsSchema = z.object({
   success: z.boolean(),
   data: z.object({
+    start_date: z.string().optional(),
+    end_date: z.string().optional(),
     daily_volume_usd: z.number().optional(),
     total_volume_usd: z.number().optional(),
+    daily_fee_usd: z.number().optional(),
+    total_fee_usd: z.number().optional(),
+    pool_name: z.string().optional(),
   }).passthrough(),
+});
+
+const AdrenaErrorSchema = z.object({
+  error: z.string(),
 });
 
 // ── Circuit Breaker ──
@@ -189,6 +220,7 @@ export class AdrenaClient {
   /**
    * Fetch positions for a wallet. Returns all positions (open + closed).
    * Use status filter in caller to separate.
+   * Returns [] for wallets with no positions (API returns {error: "Not found"}).
    */
   async fetchPositions(
     wallet: string,
@@ -199,7 +231,60 @@ export class AdrenaClient {
     if (opts.status) params.set('status', opts.status);
 
     return withRetry(
-      () => this.fetch(`/position?${params}`, PositionListSchema).then(r => r.data as AdrenaPosition[]),
+      async () => {
+        if (this.circuitBreaker.isOpen()) {
+          throw new Error(`Circuit breaker open — Adrena API unavailable (pausing 60s)`);
+        }
+
+        await this.rateLimiter.acquire();
+
+        const url = `${this.baseUrl}/position?${params}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+        try {
+          const response = await globalThis.fetch(url, {
+            signal: controller.signal,
+            headers: { 'Accept': 'application/json' },
+          });
+
+          const json = await response.json();
+
+          // Handle {error: "Not found"} for wallets with no positions
+          const errorParse = AdrenaErrorSchema.safeParse(json);
+          if (errorParse.success) {
+            if (errorParse.data.error === 'Not found') {
+              this.circuitBreaker.reset();
+              return [];
+            }
+            throw new Error(`Adrena API error: ${errorParse.data.error}`);
+          }
+
+          // Try wrapped format: {success: true, data: [...]}
+          const wrappedParse = PositionListSchema.safeParse(json);
+          if (wrappedParse.success) {
+            this.circuitBreaker.reset();
+            return wrappedParse.data.data as AdrenaPosition[];
+          }
+
+          // Try raw array format: [...]
+          const arrayParse = PositionArraySchema.safeParse(json);
+          if (arrayParse.success) {
+            this.circuitBreaker.reset();
+            return arrayParse.data as AdrenaPosition[];
+          }
+
+          // Both failed — throw with details
+          throw new Error(
+            `Adrena position parse failed. Wrapped: ${wrappedParse.error.message.slice(0, 200)}. Array: ${arrayParse.error.message.slice(0, 200)}`
+          );
+        } catch (err) {
+          this.circuitBreaker.recordFailure();
+          throw err;
+        } finally {
+          clearTimeout(timeout);
+        }
+      },
       { retries: 3, baseMs: 1000 }
     );
   }
