@@ -180,6 +180,26 @@ const migrations: Record<string, Migration> = {
       }
     },
   },
+
+  '002_user_stats': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_user_stats')
+        .addColumn('user_pubkey', 'varchar(44)', col => col.primaryKey())
+        .addColumn('current_streak', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('best_streak', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('streak_type', 'varchar(4)', col => col.notNull().defaultTo('none'))
+        .addColumn('total_wins', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('total_losses', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('title', 'varchar(24)')
+        .addColumn('mutagen_multiplier', sql`numeric(4,2)`, col => col.notNull().defaultTo(1.0))
+        .addColumn('updated_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_user_stats').ifExists().execute();
+    },
+  },
 };
 
 class InlineMigrationProvider implements MigrationProvider {

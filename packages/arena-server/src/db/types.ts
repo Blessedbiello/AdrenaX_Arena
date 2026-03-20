@@ -130,6 +130,19 @@ export interface ArenaSeasonPointsTable {
   clan_points: number;
 }
 
+// ── Arena User Stats ──
+export interface ArenaUserStatsTable {
+  user_pubkey: string;
+  current_streak: number;
+  best_streak: number;
+  streak_type: 'win' | 'loss' | 'none';
+  total_wins: number;
+  total_losses: number;
+  title: string | null;
+  mutagen_multiplier: ColumnType<number, number | string, number | string>;
+  updated_at: Generated<Date>;
+}
+
 // ── Database Interface ──
 export interface DB {
   arena_seasons: ArenaSeasonsTable;
@@ -141,6 +154,7 @@ export interface DB {
   arena_round_snapshots: ArenaRoundSnapshotsTable;
   arena_rewards: ArenaRewardsTable;
   arena_season_points: ArenaSeasonPointsTable;
+  arena_user_stats: ArenaUserStatsTable;
 }
 
 // Export helper types
@@ -156,3 +170,4 @@ export type Duel = Selectable<ArenaDuelsTable>;
 export type NewDuel = Insertable<ArenaDuelsTable>;
 export type Prediction = Selectable<ArenaPredictionsTable>;
 export type Reward = Selectable<ArenaRewardsTable>;
+export type UserStats = Selectable<ArenaUserStatsTable>;
