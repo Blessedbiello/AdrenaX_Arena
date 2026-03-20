@@ -10,6 +10,8 @@ import { userRouter } from './routes/users.js';
 import { generalLimiter } from './middleware/rate-limit.js';
 import { getDb, closeDb } from './db/connection.js';
 import { startIndexerWorker, closeIndexer } from './engine/indexer.js';
+import { startRewardWorker, closeRewardWorker } from './rewards/distributor.js';
+import { closeAuthRedis } from './middleware/auth.js';
 import { expireStaleDuels } from './engine/duel.js';
 
 const app = express();
@@ -136,6 +138,14 @@ async function startBackgroundJobs() {
     console.warn('[Worker] Failed to start indexer (Redis may be unavailable):', (err as Error).message);
   }
 
+  // Start reward distributor worker
+  try {
+    startRewardWorker(env.REDIS_URL);
+    console.log('[Worker] Reward distributor started');
+  } catch (err) {
+    console.warn('[Worker] Failed to start reward worker:', (err as Error).message);
+  }
+
   // Expire stale duels every minute
   expireInterval = setInterval(async () => {
     try {
@@ -152,6 +162,8 @@ async function shutdown() {
   console.log('\nShutting down...');
   clearInterval(expireInterval);
   await closeIndexer();
+  await closeRewardWorker();
+  await closeAuthRedis();
   server.close();
   await closeDb();
   process.exit(0);
