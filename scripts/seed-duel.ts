@@ -2,28 +2,41 @@ import 'dotenv/config';
 
 const API_BASE = process.env.API_BASE || 'http://localhost:3000';
 
-async function main() {
-  console.log('Seeding test duel...\n');
+async function api(path: string, opts: RequestInit = {}) {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', ...opts.headers },
+  });
+  return res.json();
+}
 
-  // Test wallets (these are just example pubkeys for testing)
+async function main() {
+  console.log('Seeding test duel...');
+  console.log(`API: ${API_BASE}`);
+  console.log('Note: Requires DEV_MODE_SKIP_AUTH=true on the server\n');
+
+  // Test wallets
   const challenger = 'AdrN1challenger111111111111111111111111111';
   const defender = 'AdrN1defender1111111111111111111111111111';
 
   // Step 1: Get nonce for challenger
   console.log('1. Getting nonce for challenger...');
-  const nonceRes = await fetch(`${API_BASE}/api/arena/users/nonce/${challenger}`);
-  const nonceData = await nonceRes.json();
-  console.log(`   Nonce: ${nonceData.data?.nonce?.slice(0, 16)}...`);
+  const nonceRes = await api(`/api/arena/users/nonce/${challenger}`);
+  if (!nonceRes.success) {
+    console.error('   Failed to get nonce:', nonceRes.error);
+    process.exit(1);
+  }
+  const nonce = nonceRes.data.nonce;
+  console.log(`   Nonce: ${nonce.slice(0, 16)}...`);
 
-  // Step 2: Create an honor duel (no auth needed for seed script — bypass in dev)
+  // Step 2: Create an honor duel (using dev-mode auth bypass)
   console.log('2. Creating honor duel...');
-  const duelRes = await fetch(`${API_BASE}/api/arena/duels`, {
+  const duelRes = await api('/api/arena/duels', {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       'x-wallet': challenger,
       'x-signature': 'dev-bypass',
-      'x-nonce': nonceData.data?.nonce || 'dev',
+      'x-nonce': nonce,
     },
     body: JSON.stringify({
       defenderPubkey: defender,
@@ -33,36 +46,55 @@ async function main() {
     }),
   });
 
-  const duelData = await duelRes.json();
-
-  if (!duelData.success) {
-    console.error('   Failed to create duel:', duelData.error, duelData.message);
-    console.log('\n   Note: In production, auth is required. For testing,');
-    console.log('   ensure the server is running and wallet auth is properly configured.');
+  if (!duelRes.success) {
+    console.error('   Failed to create duel:', duelRes.error, duelRes.message);
+    console.log('\n   Make sure the server has DEV_MODE_SKIP_AUTH=true set.');
     process.exit(1);
   }
 
-  const duel = duelData.data;
+  const duel = duelRes.data;
   console.log(`   Duel created: ${duel.duel.id}`);
+  console.log(`   Status: ${duel.duel.status}`);
   console.log(`   Challenge URL: ${duel.challengeUrl}`);
   console.log(`   Card URL: ${duel.cardUrl}`);
 
-  // Step 3: List duels
-  console.log('\n3. Listing active duels...');
-  const listRes = await fetch(`${API_BASE}/api/arena/duels`);
-  const listData = await listRes.json();
-  console.log(`   Found ${listData.data?.length || 0} duels`);
+  // Step 3: Accept the duel as defender
+  console.log('\n3. Accepting duel as defender...');
+  const defNonceRes = await api(`/api/arena/users/nonce/${defender}`);
+  const acceptRes = await api(`/api/arena/duels/${duel.duel.id}/accept`, {
+    method: 'POST',
+    headers: {
+      'x-wallet': defender,
+      'x-signature': 'dev-bypass',
+      'x-nonce': defNonceRes.data.nonce,
+    },
+  });
 
-  // Step 4: Get duel details
-  console.log(`\n4. Fetching duel details...`);
-  const detailRes = await fetch(`${API_BASE}/api/arena/duels/${duel.duel.id}`);
-  const detailData = await detailRes.json();
-  console.log(`   Status: ${detailData.data?.duel?.status}`);
-  console.log(`   Challenger: ${detailData.data?.duel?.challenger_pubkey}`);
-  console.log(`   Defender: ${detailData.data?.duel?.defender_pubkey}`);
+  if (!acceptRes.success) {
+    console.error('   Failed to accept duel:', acceptRes.error);
+  } else {
+    console.log(`   Duel accepted! Status: ${acceptRes.data.duel.status}`);
+    console.log(`   Start: ${acceptRes.data.startTime}`);
+    console.log(`   End: ${acceptRes.data.endTime}`);
+  }
 
-  console.log('\nSeed complete! Duel ID:', duel.duel.id);
-  console.log('View at: http://localhost:3001/arena/duels/' + duel.duel.id);
+  // Step 4: List duels
+  console.log('\n4. Listing duels...');
+  const listRes = await api('/api/arena/duels');
+  console.log(`   Found ${listRes.data?.length || 0} duels`);
+
+  // Step 5: Get duel details
+  console.log('\n5. Fetching duel details...');
+  const detailRes = await api(`/api/arena/duels/${duel.duel.id}`);
+  console.log(`   Status: ${detailRes.data?.duel?.status}`);
+  console.log(`   Participants: ${detailRes.data?.participants?.length}`);
+  if (detailRes.data?.competition) {
+    console.log(`   Competition end: ${detailRes.data.competition.end_time}`);
+  }
+
+  console.log('\nSeed complete!');
+  console.log(`  Duel ID: ${duel.duel.id}`);
+  console.log(`  View at: http://localhost:3001/arena/duels/${duel.duel.id}`);
 }
 
 main().catch(err => {
