@@ -9,7 +9,7 @@ import PredictionWidget from '../../../../components/PredictionWidget';
 import ChallengeCard from '../../../../components/ChallengeCard';
 import { useWalletAuth } from '../../../../hooks/useWalletAuth';
 import { api } from '../../../../lib/api';
-import type { DuelDetails } from '../../../../lib/types';
+import type { DuelDetails, UserStreak } from '../../../../lib/types';
 
 export default function DuelPage() {
   const params = useParams();
@@ -17,12 +17,17 @@ export default function DuelPage() {
   const { connected, authenticate } = useWalletAuth();
   const { setVisible } = useWalletModal();
   const [details, setDetails] = useState<DuelDetails | null>(null);
+  const [winnerStreak, setWinnerStreak] = useState<UserStreak | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchDetails = useCallback(async () => {
     try {
       const data = await api.getDuel(duelId);
       setDetails(data);
+      // Fetch winner streak if duel is completed
+      if (data.duel.status === 'completed' && data.duel.winner_pubkey) {
+        api.getUserStreak(data.duel.winner_pubkey).then(setWinnerStreak).catch(() => {});
+      }
     } catch (err) {
       console.error('Failed to load duel:', err);
     } finally {
@@ -78,6 +83,22 @@ export default function DuelPage() {
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {/* Battle view */}
         <DuelBattle details={details} />
+
+        {/* Streak badge for winner */}
+        {duel.status === 'completed' && duel.winner_pubkey && winnerStreak && winnerStreak.current_streak >= 3 && (
+          <div className="bg-arena-card border border-arena-gold/30 rounded-xl p-4 text-center">
+            <span className="text-2xl mr-2">
+              {winnerStreak.title === 'legendary_duelist' ? '👑' : winnerStreak.title === 'arena_champion' ? '⚔' : '🔥'}
+            </span>
+            <span className="text-arena-gold font-bold text-lg">
+              {winnerStreak.title === 'legendary_duelist' ? 'Legendary Duelist' :
+               winnerStreak.title === 'arena_champion' ? 'Arena Champion' : 'Hot Streak'}
+            </span>
+            <span className="text-arena-muted ml-2">
+              ({winnerStreak.current_streak} wins) — {winnerStreak.mutagen_multiplier.toFixed(2)}x Mutagen
+            </span>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Predictions */}

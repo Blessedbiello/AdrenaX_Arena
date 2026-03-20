@@ -1,4 +1,4 @@
-import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry } from './types';
+import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -104,6 +104,10 @@ class ArenaAPI {
   // Users
   async getUserProfile(wallet: string): Promise<UserProfile> {
     return this.fetch(`/api/arena/users/${wallet}/profile`);
+  }
+
+  async getUserStreak(wallet: string): Promise<UserStreak> {
+    return this.fetch(`/api/arena/users/${wallet}/streak`);
   }
 
   // Challenge card URL (for images)

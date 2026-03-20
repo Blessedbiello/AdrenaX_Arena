@@ -82,6 +82,16 @@ export interface LeaderboardEntry {
   status: string;
 }
 
+export interface UserStreak {
+  current_streak: number;
+  best_streak: number;
+  streak_type: 'win' | 'loss' | 'none';
+  total_wins: number;
+  total_losses: number;
+  title: string | null;
+  mutagen_multiplier: number;
+}
+
 export interface UserProfile {
   wallet: string;
   duels: {
@@ -95,6 +105,13 @@ export interface UserProfile {
     won: number;
   };
   recentDuels: Duel[];
+  streak?: {
+    current: number;
+    best: number;
+    type: 'win' | 'loss' | 'none';
+    title: string | null;
+    multiplier: number;
+  };
 }
 
 export interface ApiResponse<T> {
