@@ -3,15 +3,19 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import DuelBattle from '../../../../components/DuelBattle';
 import PredictionWidget from '../../../../components/PredictionWidget';
 import ChallengeCard from '../../../../components/ChallengeCard';
+import { useWalletAuth } from '../../../../hooks/useWalletAuth';
 import { api } from '../../../../lib/api';
 import type { DuelDetails } from '../../../../lib/types';
 
 export default function DuelPage() {
   const params = useParams();
   const duelId = params.id as string;
+  const { connected, authenticate } = useWalletAuth();
+  const { setVisible } = useWalletModal();
   const [details, setDetails] = useState<DuelDetails | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -96,7 +100,16 @@ export default function DuelPage() {
             <p className="text-arena-muted mb-4">This duel is waiting for the defender to accept.</p>
             <button
               onClick={async () => {
+                if (!connected) {
+                  setVisible(true);
+                  return;
+                }
                 try {
+                  const authed = await authenticate();
+                  if (!authed) {
+                    alert('Wallet authentication failed. Please try again.');
+                    return;
+                  }
                   await api.acceptDuel(duel.id);
                   fetchDetails();
                 } catch (err) {
@@ -105,7 +118,7 @@ export default function DuelPage() {
               }}
               className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-8 py-3 rounded-lg transition-colors"
             >
-              Accept Challenge
+              {connected ? 'Accept Challenge' : 'Connect Wallet to Accept'}
             </button>
           </div>
         )}

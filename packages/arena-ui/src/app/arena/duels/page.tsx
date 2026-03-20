@@ -3,8 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import DuelCard from '../../../components/DuelCard';
 import ChallengeCard from '../../../components/ChallengeCard';
+import { useWalletAuth } from '../../../hooks/useWalletAuth';
 import { api } from '../../../lib/api';
 import type { Duel, CreateDuelInput } from '../../../lib/types';
 
@@ -12,6 +14,8 @@ const ASSETS = ['SOL', 'BTC', 'ETH', 'BONK', 'JTO', 'JITOSOL'] as const;
 
 export default function DuelsPage() {
   const searchParams = useSearchParams();
+  const { connected, authenticate, authenticating } = useWalletAuth();
+  const { setVisible } = useWalletModal();
   const [duels, setDuels] = useState<Duel[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState(searchParams.get('status') || '');
@@ -46,8 +50,21 @@ export default function DuelsPage() {
 
   async function handleCreate() {
     if (!defenderPubkey) return;
+
+    if (!connected) {
+      setVisible(true);
+      return;
+    }
+
     setCreating(true);
     try {
+      // Authenticate with wallet before creating
+      const authed = await authenticate();
+      if (!authed) {
+        alert('Wallet authentication failed. Please try again.');
+        return;
+      }
+
       const result = await api.createDuel({
         defenderPubkey,
         assetSymbol,
@@ -165,10 +182,10 @@ export default function DuelsPage() {
             </div>
             <button
               onClick={handleCreate}
-              disabled={!defenderPubkey || creating}
+              disabled={!defenderPubkey || creating || authenticating}
               className="mt-4 w-full bg-arena-accent hover:bg-arena-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-arena-bg font-bold py-3 rounded-lg transition-colors"
             >
-              {creating ? 'Creating...' : 'Send Challenge'}
+              {!connected ? 'Connect Wallet to Challenge' : authenticating ? 'Signing...' : creating ? 'Creating...' : 'Send Challenge'}
             </button>
           </div>
         )}

@@ -2,11 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import DuelCard from '../../components/DuelCard';
+import { useWalletAuth } from '../../hooks/useWalletAuth';
 import { api } from '../../lib/api';
 import type { Duel, Competition } from '../../lib/types';
 
 export default function ArenaHub() {
+  const { walletAddress, connected } = useWalletAuth();
+  const { setVisible } = useWalletModal();
   const [activeDuels, setActiveDuels] = useState<Duel[]>([]);
   const [recentDuels, setRecentDuels] = useState<Duel[]>([]);
   const [gauntlets, setGauntlets] = useState<Competition[]>([]);
@@ -50,8 +54,13 @@ export default function ArenaHub() {
             <Link href="/arena" className="text-arena-muted hover:text-arena-text transition-colors">
               Gauntlet
             </Link>
-            <button className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-4 py-2 rounded-lg transition-colors">
-              Connect Wallet
+            <button
+              onClick={() => connected ? undefined : setVisible(true)}
+              className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-4 py-2 rounded-lg transition-colors"
+            >
+              {connected && walletAddress
+                ? `${walletAddress.slice(0, 4)}...${walletAddress.slice(-4)}`
+                : 'Connect Wallet'}
             </button>
           </nav>
         </div>
