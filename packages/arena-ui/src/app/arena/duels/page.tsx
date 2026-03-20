@@ -1,0 +1,220 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
+import DuelCard from '../../../components/DuelCard';
+import ChallengeCard from '../../../components/ChallengeCard';
+import { api } from '../../../lib/api';
+import type { Duel, CreateDuelInput } from '../../../lib/types';
+
+const ASSETS = ['SOL', 'BTC', 'ETH', 'BONK', 'JTO', 'JITOSOL'] as const;
+
+export default function DuelsPage() {
+  const searchParams = useSearchParams();
+  const [duels, setDuels] = useState<Duel[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState(searchParams.get('status') || '');
+  const [showCreate, setShowCreate] = useState(searchParams.get('create') === 'true');
+  const [createdDuel, setCreatedDuel] = useState<Duel | null>(null);
+
+  // Create form state
+  const [defenderPubkey, setDefenderPubkey] = useState('');
+  const [assetSymbol, setAssetSymbol] = useState<string>('SOL');
+  const [durationHours, setDurationHours] = useState<24 | 48>(24);
+  const [isHonorDuel, setIsHonorDuel] = useState(true);
+  const [stakeAmount, setStakeAmount] = useState(0);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    loadDuels();
+  }, [filter]);
+
+  async function loadDuels() {
+    setLoading(true);
+    try {
+      const params: Record<string, string> = {};
+      if (filter) params.status = filter;
+      const data = await api.listDuels(params);
+      setDuels(data);
+    } catch (err) {
+      console.error('Failed to load duels:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleCreate() {
+    if (!defenderPubkey) return;
+    setCreating(true);
+    try {
+      const result = await api.createDuel({
+        defenderPubkey,
+        assetSymbol,
+        durationHours,
+        isHonorDuel,
+        stakeAmount: isHonorDuel ? 0 : stakeAmount,
+      });
+      setCreatedDuel(result.duel);
+      loadDuels();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create duel');
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-arena-bg">
+      <header className="border-b border-arena-border">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <Link href="/arena" className="text-arena-muted hover:text-arena-text">← Arena</Link>
+            <h1 className="text-xl font-bold">Duels</h1>
+          </div>
+          <button
+            onClick={() => { setShowCreate(!showCreate); setCreatedDuel(null); }}
+            className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-6 py-2 rounded-lg transition-colors"
+          >
+            {showCreate ? 'Close' : 'Challenge Someone'}
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-8">
+        {/* Create Duel Form */}
+        {showCreate && !createdDuel && (
+          <div className="bg-arena-card border border-arena-border rounded-2xl p-6 mb-8">
+            <h2 className="text-lg font-bold mb-4">Create a Challenge</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm text-arena-muted mb-1">Opponent Wallet</label>
+                <input
+                  type="text"
+                  value={defenderPubkey}
+                  onChange={e => setDefenderPubkey(e.target.value)}
+                  placeholder="Paste Solana wallet address"
+                  className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-2 text-arena-text focus:border-arena-accent outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-arena-muted mb-1">Asset</label>
+                <select
+                  value={assetSymbol}
+                  onChange={e => setAssetSymbol(e.target.value)}
+                  className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-2 text-arena-text focus:border-arena-accent outline-none"
+                >
+                  {ASSETS.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-arena-muted mb-1">Duration</label>
+                <div className="flex gap-2">
+                  {([24, 48] as const).map(h => (
+                    <button
+                      key={h}
+                      onClick={() => setDurationHours(h)}
+                      className={`flex-1 py-2 rounded-lg border transition-colors ${
+                        durationHours === h
+                          ? 'border-arena-accent bg-arena-accent/10 text-arena-accent'
+                          : 'border-arena-border text-arena-muted hover:border-arena-accent/50'
+                      }`}
+                    >
+                      {h}h
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-arena-muted mb-1">Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setIsHonorDuel(true)}
+                    className={`flex-1 py-2 rounded-lg border transition-colors ${
+                      isHonorDuel
+                        ? 'border-arena-accent bg-arena-accent/10 text-arena-accent'
+                        : 'border-arena-border text-arena-muted hover:border-arena-accent/50'
+                    }`}
+                  >
+                    Honor Duel
+                  </button>
+                  <button
+                    onClick={() => setIsHonorDuel(false)}
+                    className={`flex-1 py-2 rounded-lg border transition-colors ${
+                      !isHonorDuel
+                        ? 'border-arena-gold bg-arena-gold/10 text-arena-gold'
+                        : 'border-arena-border text-arena-muted hover:border-arena-gold/50'
+                    }`}
+                  >
+                    Staked
+                  </button>
+                </div>
+              </div>
+              {!isHonorDuel && (
+                <div>
+                  <label className="block text-sm text-arena-muted mb-1">Stake Amount (ADX)</label>
+                  <input
+                    type="number"
+                    value={stakeAmount}
+                    onChange={e => setStakeAmount(Number(e.target.value))}
+                    min={0}
+                    className="w-full bg-arena-bg border border-arena-border rounded-lg px-4 py-2 text-arena-text focus:border-arena-accent outline-none"
+                  />
+                </div>
+              )}
+            </div>
+            <button
+              onClick={handleCreate}
+              disabled={!defenderPubkey || creating}
+              className="mt-4 w-full bg-arena-accent hover:bg-arena-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-arena-bg font-bold py-3 rounded-lg transition-colors"
+            >
+              {creating ? 'Creating...' : 'Send Challenge'}
+            </button>
+          </div>
+        )}
+
+        {/* Created duel card */}
+        {createdDuel && (
+          <div className="mb-8">
+            <h2 className="text-lg font-bold mb-4">Challenge Created! Share it:</h2>
+            <div className="max-w-lg">
+              <ChallengeCard duel={createdDuel} />
+            </div>
+          </div>
+        )}
+
+        {/* Filters */}
+        <div className="flex gap-2 mb-6">
+          {['', 'pending', 'active', 'completed', 'expired'].map(f => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-4 py-1.5 rounded-full text-sm transition-colors ${
+                filter === f
+                  ? 'bg-arena-accent text-arena-bg font-bold'
+                  : 'bg-arena-card text-arena-muted hover:text-arena-text border border-arena-border'
+              }`}
+            >
+              {f || 'All'}
+            </button>
+          ))}
+        </div>
+
+        {/* Duel list */}
+        {loading ? (
+          <div className="text-center py-20 text-arena-muted">Loading duels...</div>
+        ) : duels.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {duels.map(duel => (
+              <DuelCard key={duel.id} duel={duel} />
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-20 text-arena-muted">
+            No duels found. {!filter && 'Be the first to create one!'}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}

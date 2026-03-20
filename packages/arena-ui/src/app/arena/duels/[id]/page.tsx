@@ -1,0 +1,115 @@
+'use client';
+
+import { useEffect, useState, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
+import DuelBattle from '../../../../components/DuelBattle';
+import PredictionWidget from '../../../../components/PredictionWidget';
+import ChallengeCard from '../../../../components/ChallengeCard';
+import { api } from '../../../../lib/api';
+import type { DuelDetails } from '../../../../lib/types';
+
+export default function DuelPage() {
+  const params = useParams();
+  const duelId = params.id as string;
+  const [details, setDetails] = useState<DuelDetails | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchDetails = useCallback(async () => {
+    try {
+      const data = await api.getDuel(duelId);
+      setDetails(data);
+    } catch (err) {
+      console.error('Failed to load duel:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [duelId]);
+
+  useEffect(() => {
+    fetchDetails();
+    // Poll for updates on active duels
+    const interval = setInterval(fetchDetails, 5000);
+    return () => clearInterval(interval);
+  }, [fetchDetails]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-arena-bg flex items-center justify-center">
+        <div className="text-arena-muted">Loading duel...</div>
+      </div>
+    );
+  }
+
+  if (!details) {
+    return (
+      <div className="min-h-screen bg-arena-bg flex items-center justify-center">
+        <div className="text-arena-muted">Duel not found</div>
+      </div>
+    );
+  }
+
+  const { duel } = details;
+  const isActive = duel.status === 'active';
+  const isPending = duel.status === 'pending';
+
+  return (
+    <div className="min-h-screen bg-arena-bg">
+      <header className="border-b border-arena-border">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center gap-4">
+            <Link href="/arena/duels" className="text-arena-muted hover:text-arena-text">← Duels</Link>
+            <h1 className="text-xl font-bold">{duel.asset_symbol} Duel</h1>
+          </div>
+          <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+            isActive ? 'bg-arena-accent/20 text-arena-accent' :
+            isPending ? 'bg-yellow-500/20 text-yellow-400' :
+            'bg-arena-muted/20 text-arena-muted'
+          }`}>
+            {duel.status.toUpperCase()}
+          </span>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* Battle view */}
+        <DuelBattle details={details} />
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Predictions */}
+          {(isActive || duel.status === 'completed') && (
+            <PredictionWidget
+              duelId={duel.id}
+              challengerPubkey={duel.challenger_pubkey}
+              defenderPubkey={duel.defender_pubkey}
+              isActive={isActive}
+            />
+          )}
+
+          {/* Share card */}
+          <ChallengeCard duel={duel} />
+        </div>
+
+        {/* Accept button for pending duels */}
+        {isPending && (
+          <div className="bg-arena-card border border-arena-accent/50 rounded-xl p-6 text-center">
+            <p className="text-arena-muted mb-4">This duel is waiting for the defender to accept.</p>
+            <button
+              onClick={async () => {
+                try {
+                  await api.acceptDuel(duel.id);
+                  fetchDetails();
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : 'Failed to accept');
+                }
+              }}
+              className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-8 py-3 rounded-lg transition-colors"
+            >
+              Accept Challenge
+            </button>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
