@@ -7,6 +7,7 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default('postgresql://arena:arena_dev@localhost:5432/adrenax_arena'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   ADRENA_API_BASE: z.string().default('https://datapi.adrena.trade'),
+  DEV_MODE_SKIP_AUTH: z.coerce.boolean().default(false),
   DISCORD_BOT_TOKEN: z.string().optional(),
   DISCORD_CHANNEL_ID: z.string().optional(),
   CHALLENGE_CARD_BASE_URL: z.string().default('http://localhost:3001'),

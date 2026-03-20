@@ -13,7 +13,7 @@ userRouter.get('/nonce/:wallet', async (req: Request, res: Response) => {
     res.status(400).json({ success: false, error: 'INVALID_WALLET' });
     return;
   }
-  const nonce = generateNonce(wallet);
+  const nonce = await generateNonce(wallet);
   res.json({ success: true, data: { nonce, message: `AdrenaX Arena Authentication\nNonce: ${nonce}` } });
 });
 
