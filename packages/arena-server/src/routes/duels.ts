@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createDuel, acceptDuel, getDuelDetails, DuelError } from '../engine/duel.js';
 import { requireAuth, generateNonce } from '../middleware/auth.js';
 import { getDb } from '../db/connection.js';
+import { arenaEvents } from '../adrena/integration.js';
 
 export const duelRouter = Router();
 
@@ -29,6 +30,22 @@ duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
       stakeAmount: input.stakeAmount,
       stakeToken: input.stakeToken,
       isHonorDuel: input.isHonorDuel,
+    });
+
+    arenaEvents.emit('duel_created', {
+      type: 'duel_created',
+      timestamp: new Date(),
+      payload: {
+        duelId: result.duel.id,
+        competitionId: result.competition.id,
+        challengerPubkey: wallet,
+        defenderPubkey: input.defenderPubkey,
+        assetSymbol: input.assetSymbol,
+        durationHours: input.durationHours,
+        isHonorDuel: input.isHonorDuel,
+        stakeAmount: input.stakeAmount,
+        stakeToken: input.stakeToken,
+      },
     });
 
     res.status(201).json({
@@ -61,6 +78,19 @@ duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) 
     const duelId = req.params.id as string;
 
     const result = await acceptDuel(duelId, wallet);
+
+    arenaEvents.emit('duel_accepted', {
+      type: 'duel_accepted',
+      timestamp: new Date(),
+      payload: {
+        duelId,
+        competitionId: result.duel.competition_id,
+        challengerPubkey: result.duel.challenger_pubkey,
+        defenderPubkey: wallet,
+        startTime: result.startTime,
+        endTime: result.endTime,
+      },
+    });
 
     res.json({
       success: true,
