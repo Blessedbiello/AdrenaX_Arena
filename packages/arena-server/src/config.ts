@@ -17,3 +17,17 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 export const env = envSchema.parse(process.env);
+
+// Production safety checks
+if (env.NODE_ENV === 'production') {
+  if (env.CHALLENGE_CARD_BASE_URL.includes('localhost')) {
+    console.warn('[Config] WARNING: CHALLENGE_CARD_BASE_URL contains "localhost" — challenge cards will not work on public URLs');
+  }
+  if (env.CORS_ORIGIN.includes('localhost')) {
+    console.warn('[Config] WARNING: CORS_ORIGIN contains "localhost" — frontend will be blocked by CORS in production');
+  }
+  if (env.DEV_MODE_SKIP_AUTH) {
+    console.error('[Config] CRITICAL: DEV_MODE_SKIP_AUTH is enabled in production — this is a security risk!');
+    process.exit(1);
+  }
+}

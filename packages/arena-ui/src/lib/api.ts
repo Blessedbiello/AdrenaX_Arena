@@ -2,6 +2,10 @@ import type { ApiResponse, Duel, DuelDetails, Competition, Participant, Predicti
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
+if (typeof window !== 'undefined' && API_BASE.includes('localhost') && window.location.hostname !== 'localhost') {
+  console.warn('[Arena] API_BASE points to localhost but app is running on', window.location.hostname);
+}
+
 class ArenaAPI {
   private authHeaders: Record<string, string> = {};
 
