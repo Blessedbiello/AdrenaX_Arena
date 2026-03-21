@@ -4,6 +4,7 @@ import type { DB } from '../db/types.js';
 import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
 import { updateStreaks } from './streaks.js';
+import { Redis } from 'ioredis';
 import { env } from '../config.js';
 
 export class DuelError extends Error {
@@ -21,6 +22,8 @@ export interface CreateDuelInput {
   stakeAmount?: number;
   stakeToken?: string;
   isHonorDuel?: boolean;
+  isRevenge?: boolean;
+  originalDuelId?: string;
 }
 
 /**
@@ -59,7 +62,11 @@ export async function createDuel(input: CreateDuelInput) {
         end_time: new Date(now.getTime() + durationHours * 60 * 60 * 1000), // Placeholder
         current_round: 1,
         total_rounds: 1,
-        config: JSON.stringify({ asset: assetSymbol, durationHours }),
+        config: JSON.stringify({
+        asset: assetSymbol,
+        durationHours,
+        ...(input.isRevenge ? { isRevenge: true, revengeMultiplier: 1.5, originalDuelId: input.originalDuelId } : {}),
+      }),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -317,6 +324,11 @@ export async function settleDuel(duelId: string) {
         .execute();
     }
 
+    // Parse competition config for revenge multiplier
+    const competitionConfig = typeof competition.config === 'string'
+      ? JSON.parse(competition.config)
+      : competition.config;
+
     // Create Mutagen rewards for honor duels (with streak multiplier)
     if (duel.is_honor_duel && result.winner) {
       // Look up winner's streak multiplier
@@ -326,8 +338,9 @@ export async function settleDuel(duelId: string) {
         .select('mutagen_multiplier')
         .executeTakeFirst();
 
-      const multiplier = Number(winnerStats?.mutagen_multiplier ?? 1.0);
-      const mutagenAmount = Math.round(50 * multiplier);
+      const streakMultiplier = Number(winnerStats?.mutagen_multiplier ?? 1.0);
+      const revengeMultiplier = competitionConfig?.revengeMultiplier ?? 1;
+      const mutagenAmount = Math.round(50 * streakMultiplier * revengeMultiplier);
 
       await trx
         .insertInto('arena_rewards')
@@ -354,6 +367,28 @@ export async function settleDuel(duelId: string) {
 
     // Schedule reward processing
     await scheduleRewardProcessing(redisUrl, duel.competition_id);
+
+    // Create revenge window for the loser (30-min TTL)
+    if (result.winner) {
+      const loserPubkey = result.winner === duel.challenger_pubkey
+        ? duel.defender_pubkey
+        : duel.challenger_pubkey;
+      if (loserPubkey) {
+        try {
+          const redis = new Redis(env.REDIS_URL);
+          const revengeKey = `arena:revenge:${loserPubkey}:${result.winner}`;
+          await redis.set(revengeKey, JSON.stringify({
+            originalDuelId: duelId,
+            assetSymbol: duel.asset_symbol,
+            durationHours: duel.duration_hours,
+            isHonorDuel: duel.is_honor_duel,
+          }), 'EX', 1800); // 30 minutes
+          await redis.quit();
+        } catch (err) {
+          console.error('[Duel] Failed to create revenge window:', (err as Error).message);
+        }
+      }
+    }
 
     // Settle predictions
     if (result.winner) {
@@ -436,6 +471,79 @@ export async function getDuelDetails(duelId: string) {
   ]);
 
   return { duel, participants, predictions, competition };
+}
+
+/**
+ * Create a revenge duel. Requires an active revenge window in Redis.
+ */
+export async function createRevengeDuel(challengerPubkey: string, opponentPubkey: string) {
+  const redis = new Redis(env.REDIS_URL);
+
+  try {
+    const revengeKey = `arena:revenge:${challengerPubkey}:${opponentPubkey}`;
+    const raw = await redis.get(revengeKey);
+
+    if (!raw) {
+      throw new DuelError('NO_REVENGE_WINDOW', 'No active revenge window against this opponent');
+    }
+
+    const config = JSON.parse(raw) as {
+      originalDuelId: string;
+      assetSymbol: string;
+      durationHours: 24 | 48;
+      isHonorDuel: boolean;
+    };
+
+    // Create the duel with revenge settings
+    const result = await createDuel({
+      challengerPubkey,
+      defenderPubkey: opponentPubkey,
+      assetSymbol: config.assetSymbol,
+      durationHours: config.durationHours,
+      isHonorDuel: config.isHonorDuel,
+      isRevenge: true,
+      originalDuelId: config.originalDuelId,
+    });
+
+    // Delete the revenge key
+    await redis.del(revengeKey);
+
+    return result;
+  } finally {
+    await redis.quit();
+  }
+}
+
+/**
+ * Check active revenge windows for a wallet.
+ */
+export async function getRevengeWindows(wallet: string) {
+  const redis = new Redis(env.REDIS_URL);
+
+  try {
+    const pattern = `arena:revenge:${wallet}:*`;
+    const keys = await redis.keys(pattern);
+    const windows = [];
+
+    for (const key of keys) {
+      const raw = await redis.get(key);
+      const ttl = await redis.ttl(key);
+      if (raw && ttl > 0) {
+        const opponentPubkey = key.split(':').pop()!;
+        const config = JSON.parse(raw);
+        windows.push({
+          opponentPubkey,
+          originalDuelId: config.originalDuelId,
+          assetSymbol: config.assetSymbol,
+          ttlSeconds: ttl,
+        });
+      }
+    }
+
+    return windows;
+  } finally {
+    await redis.quit();
+  }
 }
 
 // ── Helpers ──

@@ -1,4 +1,4 @@
-import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak } from './types';
+import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak, RevengeWindow } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -108,6 +108,18 @@ class ArenaAPI {
 
   async getUserStreak(wallet: string): Promise<UserStreak> {
     return this.fetch(`/api/arena/users/${wallet}/streak`);
+  }
+
+  // Revenge
+  async createRevengeDuel(opponentPubkey: string): Promise<{ duel: Duel; competition: Competition }> {
+    return this.fetch('/api/arena/duels/revenge', {
+      method: 'POST',
+      body: JSON.stringify({ opponentPubkey }),
+    });
+  }
+
+  async getRevengeWindows(wallet: string): Promise<RevengeWindow[]> {
+    return this.fetch(`/api/arena/duels/revenge/${wallet}`);
   }
 
   // Challenge card URL (for images)

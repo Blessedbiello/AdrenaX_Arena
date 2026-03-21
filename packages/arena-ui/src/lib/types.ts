@@ -114,6 +114,13 @@ export interface UserProfile {
   };
 }
 
+export interface RevengeWindow {
+  opponentPubkey: string;
+  originalDuelId: string;
+  assetSymbol: string;
+  ttlSeconds: number;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   error?: string;

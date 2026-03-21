@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
 import DuelBattle from '../../../../components/DuelBattle';
@@ -9,15 +9,17 @@ import PredictionWidget from '../../../../components/PredictionWidget';
 import ChallengeCard from '../../../../components/ChallengeCard';
 import { useWalletAuth } from '../../../../hooks/useWalletAuth';
 import { api } from '../../../../lib/api';
-import type { DuelDetails, UserStreak } from '../../../../lib/types';
+import type { DuelDetails, UserStreak, RevengeWindow } from '../../../../lib/types';
 
 export default function DuelPage() {
   const params = useParams();
   const duelId = params.id as string;
-  const { connected, authenticate } = useWalletAuth();
+  const router = useRouter();
+  const { connected, authenticate, walletAddress } = useWalletAuth();
   const { setVisible } = useWalletModal();
   const [details, setDetails] = useState<DuelDetails | null>(null);
   const [winnerStreak, setWinnerStreak] = useState<UserStreak | null>(null);
+  const [revengeWindow, setRevengeWindow] = useState<RevengeWindow | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchDetails = useCallback(async () => {
@@ -27,6 +29,13 @@ export default function DuelPage() {
       // Fetch winner streak if duel is completed
       if (data.duel.status === 'completed' && data.duel.winner_pubkey) {
         api.getUserStreak(data.duel.winner_pubkey).then(setWinnerStreak).catch(() => {});
+        // Check for revenge window if current user is the loser
+        if (walletAddress && data.duel.winner_pubkey !== walletAddress) {
+          api.getRevengeWindows(walletAddress).then(windows => {
+            const match = windows.find(w => w.opponentPubkey === data.duel.winner_pubkey);
+            if (match) setRevengeWindow(match);
+          }).catch(() => {});
+        }
       }
     } catch (err) {
       console.error('Failed to load duel:', err);
@@ -114,6 +123,32 @@ export default function DuelPage() {
           {/* Share card */}
           <ChallengeCard duel={duel} />
         </div>
+
+        {/* Revenge button for losers */}
+        {duel.status === 'completed' && revengeWindow && (
+          <div className="bg-arena-card border-l-4 border-orange-500 rounded-xl p-6 text-center">
+            <p className="text-orange-400 font-bold text-lg mb-2">REVENGE AVAILABLE</p>
+            <p className="text-arena-muted mb-4">
+              You have {Math.floor(revengeWindow.ttlSeconds / 60)} minutes to challenge them back — same asset, same duration, 1.5x Mutagen!
+            </p>
+            <button
+              onClick={async () => {
+                if (!connected) { setVisible(true); return; }
+                try {
+                  const authed = await authenticate();
+                  if (!authed) { alert('Wallet authentication failed.'); return; }
+                  const result = await api.createRevengeDuel(duel.winner_pubkey!);
+                  router.push(`/arena/duels/${result.duel.id}`);
+                } catch (err) {
+                  alert(err instanceof Error ? err.message : 'Failed to create revenge duel');
+                }
+              }}
+              className="bg-gradient-to-r from-orange-500 to-red-500 hover:from-orange-600 hover:to-red-600 text-white font-bold px-8 py-3 rounded-lg transition-colors"
+            >
+              REVENGE!
+            </button>
+          </div>
+        )}
 
         {/* Accept button for pending duels */}
         {isPending && (

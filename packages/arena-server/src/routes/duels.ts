@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { createDuel, acceptDuel, getDuelDetails, DuelError } from '../engine/duel.js';
+import { createDuel, acceptDuel, getDuelDetails, DuelError, createRevengeDuel, getRevengeWindows } from '../engine/duel.js';
 import { requireAuth, generateNonce } from '../middleware/auth.js';
 import { getDb } from '../db/connection.js';
 import { arenaEvents } from '../adrena/integration.js';
@@ -219,6 +219,51 @@ duelRouter.get('/:id/stream', async (req: Request, res: Response) => {
   req.on('close', () => {
     clearInterval(interval);
   });
+});
+
+// Create a revenge duel
+duelRouter.post('/revenge', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const wallet = (req as any).wallet as string;
+    const { opponentPubkey } = z.object({ opponentPubkey: z.string().min(32).max(44) }).parse(req.body);
+    const result = await createRevengeDuel(wallet, opponentPubkey);
+
+    arenaEvents.emit('duel_created', {
+      type: 'duel_created',
+      timestamp: new Date(),
+      payload: {
+        duelId: result.duel.id,
+        competitionId: result.competition.id,
+        challengerPubkey: wallet,
+        defenderPubkey: opponentPubkey,
+        assetSymbol: result.duel.asset_symbol,
+        durationHours: result.duel.duration_hours,
+        isHonorDuel: result.duel.is_honor_duel,
+        stakeAmount: Number(result.duel.stake_amount),
+        stakeToken: result.duel.stake_token,
+      },
+    });
+
+    res.status(201).json({ success: true, data: result });
+  } catch (err) {
+    if (err instanceof DuelError) {
+      res.status(400).json({ success: false, error: err.code, message: err.message });
+      return;
+    }
+    console.error('[Duels] Revenge error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
+// Get active revenge windows for a wallet
+duelRouter.get('/revenge/:wallet', async (req: Request, res: Response) => {
+  try {
+    const windows = await getRevengeWindows(req.params.wallet as string);
+    res.json({ success: true, data: windows });
+  } catch (err) {
+    console.error('[Duels] Revenge windows error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
 });
 
 // Submit prediction
