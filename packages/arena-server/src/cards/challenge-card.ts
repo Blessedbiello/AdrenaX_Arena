@@ -358,14 +358,13 @@ export async function generateChallengeCard(duel: {
     fonts: [
       {
         name: 'sans-serif',
-        // Use a system font or bundled font
-        data: await getDefaultFont(),
+        data: await getRegularFont(),
         weight: 400,
         style: 'normal',
       },
       {
         name: 'sans-serif',
-        data: await getDefaultFont(),
+        data: await getBoldFont(),
         weight: 700,
         style: 'normal',
       },
@@ -380,12 +379,24 @@ export async function generateChallengeCard(duel: {
   return pngData.asPng();
 }
 
-/**
- * Get a default font for satori rendering.
- * In production, bundle Inter or another web font.
- */
-async function getDefaultFont(): Promise<ArrayBuffer> {
-  // Try to use a system font
+// Resolve __dirname equivalent for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Cache loaded fonts in memory
+let regularFontCache: ArrayBuffer | null = null;
+let boldFontCache: ArrayBuffer | null = null;
+
+function loadFont(filename: string): ArrayBuffer {
+  // Try bundled font first
+  const bundledPath = join(__dirname, 'fonts', filename);
+  try {
+    const buffer = readFileSync(bundledPath);
+    return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  } catch {
+    // Bundled font not found — try system fallbacks
+  }
+
   const systemFontPaths = [
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
@@ -401,9 +412,19 @@ async function getDefaultFont(): Promise<ArrayBuffer> {
     }
   }
 
-  // Fallback: fetch Inter from Google Fonts (cached after first use)
-  const response = await fetch(
-    'https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfAZ9hjQ.ttf'
-  );
-  return response.arrayBuffer();
+  throw new Error('No fonts available — bundle Inter fonts in src/cards/fonts/');
+}
+
+async function getRegularFont(): Promise<ArrayBuffer> {
+  if (!regularFontCache) {
+    regularFontCache = loadFont('Inter-Regular.ttf');
+  }
+  return regularFontCache;
+}
+
+async function getBoldFont(): Promise<ArrayBuffer> {
+  if (!boldFontCache) {
+    boldFontCache = loadFont('Inter-Bold.ttf');
+  }
+  return boldFontCache;
 }
