@@ -215,6 +215,44 @@ async function main() {
   check('Prediction stats fetched', predStats.success === true);
   check('Has 1 prediction', predStats.data?.total === 1);
 
+  // ── 14. Open Challenges ──
+  console.log('\n14. Open Challenges');
+  const openRes = await authedApi('/api/arena/duels', alice, {
+    method: 'POST',
+    body: JSON.stringify({
+      assetSymbol: 'ETH',
+      durationHours: 24,
+      isHonorDuel: true,
+    }),
+  });
+  check('Open challenge created', openRes.success === true, openRes.error);
+  check('Defender is null', openRes.data?.duel?.defender_pubkey === null);
+
+  const openList = await api('/api/arena/duels?type=open');
+  check('Open duels list fetched', openList.success === true);
+  check('At least 1 open duel', (openList.data?.length || 0) >= 1);
+
+  // ── 15. Streak Endpoint ──
+  console.log('\n15. Streak Stats');
+  const streakRes = await api(`/api/arena/users/${alice}/streak`);
+  check('Streak endpoint responds', streakRes.success === true);
+  check('Has current_streak', streakRes.data?.current_streak !== undefined);
+  check('Has best_streak', streakRes.data?.best_streak !== undefined);
+  check('Has total_wins', streakRes.data?.total_wins !== undefined);
+
+  // ── 16. Profile Includes Streak ──
+  console.log('\n16. Profile Streak Data');
+  const profileRes = await api(`/api/arena/users/${alice}/profile`);
+  check('Profile has streak', profileRes.data?.streak !== undefined);
+  check('Streak has current', profileRes.data?.streak?.current !== undefined);
+  check('Streak has title', 'title' in (profileRes.data?.streak || {}));
+
+  // ── 17. Revenge Windows ──
+  console.log('\n17. Revenge Windows');
+  const revengeRes = await api(`/api/arena/duels/revenge/${alice}`);
+  check('Revenge endpoint responds', revengeRes.success === true);
+  check('Returns array', Array.isArray(revengeRes.data));
+
   // ── Summary ──
   console.log('\n' + '='.repeat(50));
   console.log(`\n  ${PASS} ${passed} passed`);
