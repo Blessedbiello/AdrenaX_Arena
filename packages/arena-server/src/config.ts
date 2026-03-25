@@ -14,8 +14,11 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default('http://localhost:3001'),
   SOLANA_RPC_URL: z.string().default('http://localhost:8899'),
   PROGRAM_ID: z.string().optional(),
+  ESCROW_CONFIG_PDA: z.string().optional(),
   TREASURY_PUBKEY: z.string().optional(),
   OPERATOR_KEYPAIR_PATH: z.string().optional(),
+  ADX_MINT: z.string().optional(),
+  USDC_MINT: z.string().optional(),
   ADMIN_API_KEY: z.string().optional(),
   ADMIN_WALLETS: z.string().optional(),
   ADRENA_MUTAGEN_API_URL: z.string().optional(),
@@ -41,5 +44,18 @@ if (env.NODE_ENV === 'production') {
   if (env.DEV_MODE_SKIP_AUTH) {
     console.error('[Config] CRITICAL: DEV_MODE_SKIP_AUTH is enabled in production — this is a security risk!');
     process.exit(1);
+  }
+  if (env.PROGRAM_ID) {
+    const missing = [
+      !env.TREASURY_PUBKEY ? 'TREASURY_PUBKEY' : null,
+      !env.OPERATOR_KEYPAIR_PATH ? 'OPERATOR_KEYPAIR_PATH' : null,
+      !env.ADX_MINT ? 'ADX_MINT' : null,
+      !env.USDC_MINT ? 'USDC_MINT' : null,
+    ].filter(Boolean);
+
+    if (missing.length > 0) {
+      console.error(`[Config] CRITICAL: Escrow is enabled but required settings are missing: ${missing.join(', ')}`);
+      process.exit(1);
+    }
   }
 }

@@ -9,14 +9,18 @@ import { competitionRouter } from './routes/competitions.js';
 import { userRouter } from './routes/users.js';
 import { clanRouter } from './routes/clans.js';
 import { adminRouter } from './routes/admin.js';
+import { webhookRouter } from './routes/webhooks.js';
+import { seasonRouter } from './routes/season.js';
 import { generalLimiter } from './middleware/rate-limit.js';
 import { getDb, closeDb } from './db/connection.js';
 import { startIndexerWorker, closeIndexer } from './engine/indexer.js';
 import { startRewardWorker, closeRewardWorker } from './rewards/distributor.js';
 import { closeAuthRedis } from './middleware/auth.js';
 import { expireStaleDuels } from './engine/duel.js';
+import { expireStaleClanWars } from './engine/clan.js';
 import { initDiscordBot, destroyDiscordBot, postDuelChallenge, postDuelAccepted, postDuelResult } from './discord/bot.js';
 import { arenaEvents, setAdapter } from './adrena/integration.js';
+import { processWebhookRetries } from './adrena/integration.js';
 import { MutagenAdapterImpl } from './adrena/adapters/mutagen.js';
 import { LeaderboardAdapterImpl } from './adrena/adapters/leaderboard.js';
 import { QuestAdapterImpl } from './adrena/adapters/quest.js';
@@ -46,6 +50,8 @@ app.use('/api/arena/duels', duelRouter);
 app.use('/api/arena/competitions', competitionRouter);
 app.use('/api/arena/users', userRouter);
 app.use('/api/arena/clans', clanRouter);
+app.use('/api/arena/season', seasonRouter);
+app.use('/api/arena/webhooks', webhookRouter);
 app.use('/api/admin', adminRouter);
 
 // Challenge card image endpoint (placeholder — will be replaced with satori)
@@ -91,8 +97,10 @@ const server = createServer(app);
 
 // WebSocket for live duel updates
 const wss = new WebSocketServer({ server, path: '/ws/duels' });
+const wssLive = new WebSocketServer({ server, path: '/ws/live' });
 
 const duelSubscriptions = new Map<string, Set<WebSocket>>();
+const liveChannelSubscriptions = new Map<string, Set<WebSocket>>();
 
 wss.on('connection', (ws: WebSocket) => {
   let subscribedDuelId: string | null = null;
@@ -124,6 +132,32 @@ wss.on('connection', (ws: WebSocket) => {
   });
 });
 
+wssLive.on('connection', (ws: WebSocket) => {
+  const subscribedChannels = new Set<string>();
+
+  ws.on('message', (data) => {
+    try {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'subscribe' && typeof msg.channel === 'string') {
+        if (!liveChannelSubscriptions.has(msg.channel)) {
+          liveChannelSubscriptions.set(msg.channel, new Set());
+        }
+        liveChannelSubscriptions.get(msg.channel)!.add(ws);
+        subscribedChannels.add(msg.channel);
+        ws.send(JSON.stringify({ type: 'subscribed', channel: msg.channel }));
+      }
+    } catch {
+      // Ignore malformed messages
+    }
+  });
+
+  ws.on('close', () => {
+    for (const channel of subscribedChannels) {
+      liveChannelSubscriptions.get(channel)?.delete(ws);
+    }
+  });
+});
+
 // Broadcast duel update to all subscribers
 export function broadcastDuelUpdate(duelId: string, data: unknown): void {
   const subs = duelSubscriptions.get(duelId);
@@ -136,8 +170,20 @@ export function broadcastDuelUpdate(duelId: string, data: unknown): void {
   }
 }
 
+function broadcastLiveChannel(channel: string, data: unknown): void {
+  const subscribers = liveChannelSubscriptions.get(channel);
+  if (!subscribers) return;
+  const message = JSON.stringify({ type: 'channel_update', channel, data });
+  for (const ws of subscribers) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(message);
+    }
+  }
+}
+
 // Background jobs
 let expireInterval: ReturnType<typeof setInterval>;
+let webhookRetryInterval: ReturnType<typeof setInterval>;
 
 async function startBackgroundJobs() {
   // Start indexer worker
@@ -183,6 +229,7 @@ async function startBackgroundJobs() {
       is_honor_duel: p.isHonorDuel,
       duration_hours: p.durationHours,
     }).catch(() => {});
+    broadcastLiveChannel(`duel:${p.duelId}:update`, event.payload);
   });
 
   arenaEvents.on('duel_accepted', (event) => {
@@ -194,6 +241,8 @@ async function startBackgroundJobs() {
       asset_symbol: '', // Not in event payload, Discord embed handles gracefully
       duration_hours: 0,
     }).catch(() => {});
+    broadcastDuelUpdate(p.duelId, event.payload);
+    broadcastLiveChannel(`duel:${p.duelId}:update`, event.payload);
   });
 
   arenaEvents.on('duel_settled', (event) => {
@@ -210,15 +259,40 @@ async function startBackgroundJobs() {
       stake_amount: 0,
       stake_token: 'ADX',
     }).catch(() => {});
+    broadcastDuelUpdate(p.duelId, event.payload);
+    broadcastLiveChannel(`duel:${p.duelId}:settlement`, event.payload);
+    broadcastLiveChannel('season:standings', event.payload);
   });
 
-  // Expire stale duels every minute
+  arenaEvents.on('gauntlet_activated', (event) => {
+    broadcastLiveChannel(`gauntlet:${event.payload.competitionId}:round`, event.payload);
+  });
+
+  arenaEvents.on('gauntlet_settled', (event) => {
+    broadcastLiveChannel(`gauntlet:${event.payload.competitionId}:leaderboard`, event.payload);
+    broadcastLiveChannel(`gauntlet:${event.payload.competitionId}:round`, event.payload);
+    broadcastLiveChannel('season:standings', event.payload);
+  });
+
+  // Expire stale duels and clan wars every minute
   expireInterval = setInterval(async () => {
     try {
-      const count = await expireStaleDuels();
-      if (count > 0) console.log(`[Cleanup] Expired ${count} stale duels`);
+      const [duelCount, clanWarCount] = await Promise.all([
+        expireStaleDuels(),
+        expireStaleClanWars(),
+      ]);
+      if (duelCount > 0) console.log(`[Cleanup] Expired ${duelCount} stale duels`);
+      if (clanWarCount > 0) console.log(`[Cleanup] Expired ${clanWarCount} stale clan wars`);
     } catch (err) {
       console.error('[Cleanup] Expire error:', err);
+    }
+  }, 60_000);
+
+  webhookRetryInterval = setInterval(async () => {
+    try {
+      await processWebhookRetries();
+    } catch (err) {
+      console.error('[Webhook] Retry loop error:', err);
     }
   }, 60_000);
 }
@@ -227,6 +301,7 @@ async function startBackgroundJobs() {
 async function shutdown() {
   console.log('\nShutting down...');
   clearInterval(expireInterval);
+  clearInterval(webhookRetryInterval);
   await closeIndexer();
   await closeRewardWorker();
   await closeAuthRedis();

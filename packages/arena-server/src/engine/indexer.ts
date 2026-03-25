@@ -109,6 +109,13 @@ export function startIndexerWorker(redisUrl: string): Worker {
           await activateGauntletRound(competitionId);
           break;
         }
+        case 'settle-clan-war': {
+          const { warId } = job.data;
+          const { settleClanWar } = await import('./clan.js');
+          console.log(`[Worker] Settling clan war ${warId}`);
+          await settleClanWar(warId);
+          break;
+        }
         case 'index-positions':
         default: {
           const { competitionId, userPubkey } = job.data;
@@ -162,13 +169,21 @@ async function indexParticipantPositions(
     .selectFrom('arena_competitions')
     .where('id', '=', competitionId)
     .where('status', 'in', ['active', 'settling'])
-    .select(['start_time', 'end_time'])
+    .select(['mode', 'start_time', 'end_time', 'config'])
     .executeTakeFirst();
 
   if (!competition) return; // Competition no longer active
 
-  const startTime = new Date(competition.start_time);
-  const endTime = new Date(competition.end_time);
+  const config = typeof competition.config === 'string'
+    ? JSON.parse(competition.config)
+    : competition.config;
+  const startTime = competition.mode === 'gauntlet' && config?.currentRoundStart
+    ? new Date(config.currentRoundStart)
+    : new Date(competition.start_time);
+  const endTime = competition.mode === 'gauntlet' && config?.currentRoundEnd
+    ? new Date(config.currentRoundEnd)
+    : new Date(competition.end_time);
+  const duelAsset = competition.mode === 'duel' ? String(config?.asset ?? 'ANY').toUpperCase() : 'ANY';
 
   // Fetch positions from Adrena
   let positions: AdrenaPosition[];
@@ -188,9 +203,18 @@ async function indexParticipantPositions(
   const closedPositions = positions.filter(p => {
     if (p.status !== 'close' && p.status !== 'liquidated') return false;
     if (!p.entry_date || !p.exit_date) return false;
+    if (duelAsset !== 'ANY' && p.symbol.toUpperCase() !== duelAsset) return false;
     const entry = new Date(p.entry_date);
     const exit = new Date(p.exit_date);
     return entry >= startTime && exit <= endTime;
+  });
+
+  const eligiblePositions = closedPositions.filter((p) => {
+    const collateral = Number(p.entry_collateral_amount ?? p.collateral_amount ?? 0);
+    if (collateral < 50) return false;
+    const entry = new Date(p.entry_date!);
+    const exit = new Date(p.exit_date!);
+    return (exit.getTime() - entry.getTime()) / 1000 >= 60;
   });
 
   // Upsert trades (idempotent)
@@ -254,7 +278,7 @@ async function indexParticipantPositions(
 
     // Compute arena_score from eligible trades for this competition window
     const { calculateArenaScore } = await import('./scoring.js');
-    const eligibleTradesForScore = closedPositions.map(pos => ({
+    const eligibleTradesForScore = eligiblePositions.map(pos => ({
       pnl_usd: Number(pos.pnl) || 0,
       fees_usd: Number(pos.fees) || 0,
       collateral_usd: Number(pos.collateral_amount) || 0,
@@ -415,6 +439,26 @@ export async function scheduleGauntletRoundActivation(
     { competitionId },
     {
       jobId: `activate-round-${competitionId}-${Date.now()}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+  );
+}
+
+export async function scheduleClanWarSettlement(
+  redisUrl: string,
+  warId: string,
+  settleAt: Date
+): Promise<void> {
+  const queue = getIndexerQueue(redisUrl);
+  const delay = Math.max(0, settleAt.getTime() - Date.now());
+
+  await queue.add(
+    'settle-clan-war',
+    { warId },
+    {
+      jobId: `settle-clan-war-${warId}`,
       delay,
       removeOnComplete: true,
       removeOnFail: false,

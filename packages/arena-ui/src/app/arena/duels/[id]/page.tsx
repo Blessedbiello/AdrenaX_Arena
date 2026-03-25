@@ -4,12 +4,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { Connection, Transaction } from '@solana/web3.js';
 import DuelBattle from '../../../../components/DuelBattle';
 import PredictionWidget from '../../../../components/PredictionWidget';
 import ChallengeCard from '../../../../components/ChallengeCard';
 import { useWalletAuth } from '../../../../hooks/useWalletAuth';
 import { api } from '../../../../lib/api';
-import type { DuelDetails, UserStreak, RevengeWindow } from '../../../../lib/types';
+import type { DuelDetails, EscrowTransactionIntent, UserStreak, RevengeWindow } from '../../../../lib/types';
 
 export default function DuelPage() {
   const params = useParams();
@@ -17,6 +19,7 @@ export default function DuelPage() {
   const router = useRouter();
   const { connected, authenticate, walletAddress } = useWalletAuth();
   const { setVisible } = useWalletModal();
+  const { sendTransaction } = useWallet();
   const [details, setDetails] = useState<DuelDetails | null>(null);
   const [winnerStreak, setWinnerStreak] = useState<UserStreak | null>(null);
   const [revengeWindow, setRevengeWindow] = useState<RevengeWindow | null>(null);
@@ -44,6 +47,18 @@ export default function DuelPage() {
     }
   }, [duelId]);
 
+  const sendEscrowIntent = useCallback(async (intent: EscrowTransactionIntent) => {
+    const connection = new Connection(intent.rpcUrl, 'confirmed');
+    const tx = Transaction.from(Uint8Array.from(atob(intent.serializedTransaction), (char) => char.charCodeAt(0)));
+    const signature = await sendTransaction(tx, connection);
+    await connection.confirmTransaction({
+      signature,
+      blockhash: intent.recentBlockhash,
+      lastValidBlockHeight: intent.lastValidBlockHeight,
+    }, 'confirmed');
+    return signature;
+  }, [sendTransaction]);
+
   useEffect(() => {
     fetchDetails();
     // Poll for updates on active duels
@@ -70,6 +85,8 @@ export default function DuelPage() {
   const { duel } = details;
   const isActive = duel.status === 'active';
   const isPending = duel.status === 'pending';
+  const isChallenger = walletAddress === duel.challenger_pubkey;
+  const requiresStake = !duel.is_honor_duel && Number(duel.stake_amount) > 0;
 
   return (
     <div className="min-h-screen bg-arena-bg">
@@ -153,29 +170,69 @@ export default function DuelPage() {
         {/* Accept button for pending duels */}
         {isPending && (
           <div className="bg-arena-card border border-arena-accent/50 rounded-xl p-6 text-center">
-            <p className="text-arena-muted mb-4">This duel is waiting for the defender to accept.</p>
-            <button
-              onClick={async () => {
-                if (!connected) {
-                  setVisible(true);
-                  return;
-                }
-                try {
-                  const authed = await authenticate();
-                  if (!authed) {
-                    alert('Wallet authentication failed. Please try again.');
+            <p className="text-arena-muted mb-4">
+              {requiresStake && duel.escrow_state === 'awaiting_challenger_deposit'
+                ? 'This staked duel is waiting for the challenger to fund escrow.'
+                : requiresStake && duel.escrow_state === 'awaiting_defender_deposit'
+                  ? 'The challenger funded escrow. The defender must now fund the matching stake to activate the duel.'
+                  : 'This duel is waiting for the defender to accept.'}
+            </p>
+            {requiresStake && isChallenger && duel.escrow_state === 'awaiting_challenger_deposit' && (
+              <button
+                onClick={async () => {
+                  if (!connected) {
+                    setVisible(true);
                     return;
                   }
-                  await api.acceptDuel(duel.id);
-                  fetchDetails();
-                } catch (err) {
-                  alert(err instanceof Error ? err.message : 'Failed to accept');
-                }
-              }}
-              className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-8 py-3 rounded-lg transition-colors"
-            >
-              {connected ? 'Accept Challenge' : 'Connect Wallet to Accept'}
-            </button>
+                  try {
+                    const authed = await authenticate();
+                    if (!authed) {
+                      alert('Wallet authentication failed. Please try again.');
+                      return;
+                    }
+                    const intent = await api.getChallengerEscrowIntent(duel.id);
+                    const txSignature = await sendEscrowIntent(intent);
+                    await api.confirmChallengerEscrow(duel.id, txSignature);
+                    await fetchDetails();
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Failed to fund escrow');
+                  }
+                }}
+                className="mb-4 bg-arena-gold hover:bg-arena-gold/80 text-arena-bg font-bold px-8 py-3 rounded-lg transition-colors"
+              >
+                Fund Challenger Stake
+              </button>
+            )}
+            {!isChallenger && (
+              <button
+                onClick={async () => {
+                  if (!connected) {
+                    setVisible(true);
+                    return;
+                  }
+                  try {
+                    const authed = await authenticate();
+                    if (!authed) {
+                      alert('Wallet authentication failed. Please try again.');
+                      return;
+                    }
+                    if (requiresStake) {
+                      const intent = await api.getDefenderEscrowIntent(duel.id);
+                      const txSignature = await sendEscrowIntent(intent);
+                      await api.acceptDuel(duel.id, txSignature);
+                    } else {
+                      await api.acceptDuel(duel.id);
+                    }
+                    await fetchDetails();
+                  } catch (err) {
+                    alert(err instanceof Error ? err.message : 'Failed to accept');
+                  }
+                }}
+                className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-8 py-3 rounded-lg transition-colors"
+              >
+                {connected ? (requiresStake ? 'Fund Stake and Accept' : 'Accept Challenge') : 'Connect Wallet to Accept'}
+              </button>
+            )}
           </div>
         )}
       </main>

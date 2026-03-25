@@ -1,6 +1,8 @@
 import { Queue, Worker, type Job } from 'bullmq';
 import { getDb } from '../db/connection.js';
 import { sql } from 'kysely';
+import { adapters, arenaEvents } from '../adrena/integration.js';
+import { env } from '../config.js';
 
 const QUEUE_NAME = 'reward-distributor';
 
@@ -108,6 +110,18 @@ async function processCompetitionRewards(competitionId: string): Promise<void> {
         // Token rewards (ADX, USDC): process SPL transfer
         await processTokenReward(reward);
       }
+
+      arenaEvents.emit('reward_distributed', {
+        type: 'reward_distributed',
+        timestamp: new Date(),
+        payload: {
+          competitionId,
+          userPubkey: reward.user_pubkey,
+          amount: Number(reward.amount),
+          token: reward.token,
+          rewardType: reward.reward_type,
+        },
+      });
     } catch (err) {
       console.error(
         `[Rewards] Failed to process reward ${reward.id}:`,
@@ -119,24 +133,34 @@ async function processCompetitionRewards(competitionId: string): Promise<void> {
 }
 
 /**
- * Process a Mutagen reward (off-chain points).
- * In production, this would call Adrena's Mutagen API.
+ * Process a Mutagen reward through the configured Adrena adapter.
  */
 async function processMutagenReward(reward: {
   id: number;
+  competition_id: string | null;
   user_pubkey: string;
   amount: number;
   reward_type: string;
 }): Promise<void> {
   const db = getDb();
+  if (!adapters.mutagen) {
+    if (env.NODE_ENV === 'production') {
+      throw new Error('MUTAGEN_ADAPTER_NOT_CONFIGURED');
+    }
+  } else {
+    await adapters.mutagen.awardMutagen(
+      reward.user_pubkey,
+      Number(reward.amount),
+      reward.reward_type,
+      { competitionId: reward.competition_id, rewardId: reward.id },
+    );
+  }
 
-  // Mark as processed with a sentinel "mutagen:" prefix signature
-  // This prevents double-processing while indicating it's a Mutagen reward
-  const sentinel = `mutagen:${reward.id}:${Date.now()}`;
+  const receipt = `${adapters.mutagen ? 'mutagen_api' : 'mutagen_local'}:${reward.id}:${Date.now()}`;
 
   await db
     .updateTable('arena_rewards')
-    .set({ tx_signature: sentinel })
+    .set({ tx_signature: receipt })
     .where('id', '=', reward.id)
     .where('tx_signature', 'is', null) // Idempotent check
     .execute();
@@ -148,11 +172,12 @@ async function processMutagenReward(reward: {
 
 /**
  * Process a token reward (SPL transfer).
- * In the prototype, this logs the intent and marks as processed.
- * In production, this calls the Anchor escrow program's settle instruction.
+ * Token rewards must have a real transfer path. We only auto-close protocol fee
+ * records because those are settled on-chain during escrow settlement itself.
  */
 async function processTokenReward(reward: {
   id: number;
+  competition_id: string | null;
   user_pubkey: string;
   amount: number;
   token: string;
@@ -160,40 +185,18 @@ async function processTokenReward(reward: {
 }): Promise<void> {
   const db = getDb();
 
-  // Protocol fee rewards don't need a transfer
   if (reward.reward_type === 'protocol_fee') {
-    const sentinel = `protocol_fee:${reward.id}:${Date.now()}`;
+    const receipt = `onchain_fee_recorded:${reward.competition_id ?? reward.id}:${Date.now()}`;
     await db
       .updateTable('arena_rewards')
-      .set({ tx_signature: sentinel })
+      .set({ tx_signature: receipt })
       .where('id', '=', reward.id)
       .where('tx_signature', 'is', null)
       .execute();
     console.log(`[Rewards] Protocol fee recorded: ${reward.amount} ${reward.token}`);
     return;
   }
-
-  // In production: execute SPL transfer via escrow program
-  // For prototype: simulate the transfer
-  console.log(
-    `[Rewards] Token transfer pending: ${reward.amount} ${reward.token} to ${reward.user_pubkey}`
-  );
-
-  // Simulate transaction signature (in production, this comes from the blockchain)
-  const simulatedTxSig = `sim_${reward.id}_${Date.now().toString(36)}`;
-
-  // Mark as processed — the tx_signature column's UNIQUE constraint
-  // prevents double-payment even if the worker crashes and retries
-  await db
-    .updateTable('arena_rewards')
-    .set({ tx_signature: simulatedTxSig })
-    .where('id', '=', reward.id)
-    .where('tx_signature', 'is', null) // Critical: idempotent check
-    .execute();
-
-  console.log(
-    `[Rewards] Token reward processed: ${reward.amount} ${reward.token} to ${reward.user_pubkey} (tx: ${simulatedTxSig})`
-  );
+  throw new Error(`TOKEN_REWARD_TRANSFER_NOT_IMPLEMENTED:${reward.token}`);
 }
 
 /**

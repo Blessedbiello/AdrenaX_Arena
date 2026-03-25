@@ -4,6 +4,7 @@ import bs58 from 'bs58';
 import { randomBytes } from 'crypto';
 import { Redis } from 'ioredis';
 import { env } from '../config.js';
+import { getDb } from '../db/connection.js';
 
 const NONCE_PREFIX = 'arena:nonce:';
 const NONCE_TTL_SECONDS = 300; // 5 minutes
@@ -128,7 +129,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   }
 
   // Async nonce verification
-  verifyAndConsumeNonce(wallet, nonce).then(valid => {
+  verifyAndConsumeNonce(wallet, nonce).then(async valid => {
     if (!valid) {
       res.status(401).json({ error: 'Invalid or expired nonce' });
       return;
@@ -137,6 +138,18 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     const message = `AdrenaX Arena Authentication\nNonce: ${nonce}`;
     if (!verifyWalletSignature(wallet, signature, message)) {
       res.status(401).json({ error: 'Invalid signature' });
+      return;
+    }
+
+    const bannedUser = await getDb()
+      .selectFrom('arena_user_stats')
+      .where('user_pubkey', '=', wallet)
+      .where('banned_at', 'is not', null)
+      .select('user_pubkey')
+      .executeTakeFirst();
+
+    if (bannedUser) {
+      res.status(403).json({ error: 'Wallet is banned from Arena competitions' });
       return;
     }
 

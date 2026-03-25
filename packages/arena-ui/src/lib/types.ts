@@ -12,6 +12,9 @@ export interface Duel {
   winner_pubkey: string | null;
   challenger_roi: number | null;
   defender_roi: number | null;
+  escrow_state: 'not_required' | 'awaiting_challenger_deposit' | 'awaiting_defender_deposit' | 'funded' | 'settled' | 'refunded' | 'cancelled';
+  challenger_deposit_tx: string | null;
+  defender_deposit_tx: string | null;
   escrow_tx: string | null;
   settlement_tx: string | null;
   challenge_card_url: string | null;
@@ -141,11 +144,75 @@ export interface ClanMember {
   joined_at: string;
 }
 
+export interface ClanWar {
+  id: string;
+  competition_id: string;
+  challenger_clan_id: string;
+  defender_clan_id: string;
+  duration_hours: number;
+  stake_amount: number;
+  stake_token: 'ADX' | 'USDC' | null;
+  is_honor_war: boolean;
+  status: 'pending' | 'active' | 'completed' | 'expired' | 'cancelled';
+  winner_clan_id: string | null;
+  escrow_state: 'not_required' | 'awaiting_challenger_deposit' | 'awaiting_defender_deposit' | 'funded' | 'settled' | 'refunded' | 'cancelled';
+  challenger_deposit_tx: string | null;
+  defender_deposit_tx: string | null;
+  escrow_tx: string | null;
+  settlement_tx: string | null;
+  accepted_at: string | null;
+  expires_at: string;
+  created_at: string;
+}
+
+export interface Season {
+  id: number;
+  name: string;
+  start_time: string;
+  end_time: string;
+  status: 'upcoming' | 'active' | 'completed';
+}
+
+export interface SeasonStanding {
+  user_pubkey: string;
+  total_points: number;
+  duel_points: number;
+  gauntlet_points: number;
+  clan_points: number;
+}
+
+export interface SeasonPassProgress {
+  season: Season;
+  wallet: string;
+  totalPoints: number;
+  unlockedMilestones: Array<{ name: string; threshold: number; unlock: string }>;
+  nextMilestone: { name: string; threshold: number; unlock: string } | null;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   error?: string;
   message?: string;
   data?: T;
+}
+
+export interface EscrowTransactionIntent {
+  role: 'challenger' | 'defender' | 'clan_challenger' | 'clan_defender';
+  competitionType?: 'duel' | 'clan_war';
+  competitionId?: string;
+  duelId?: string;
+  warId?: string;
+  mint: 'ADX' | 'USDC';
+  amount: number;
+  rpcUrl: string;
+  programId: string;
+  serializedTransaction: string;
+  recentBlockhash: string;
+  lastValidBlockHeight: number;
+  escrowPda: string;
+  escrowVaultAta: string;
+  mintAddress: string;
+  expiresAt: string;
 }
 
 export interface CreateDuelInput {

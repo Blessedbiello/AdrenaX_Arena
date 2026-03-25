@@ -3,27 +3,34 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
-
-interface SeasonPoints {
-  user_pubkey: string;
-  total_points: number;
-  duel_points: number;
-  gauntlet_points: number;
-  clan_points: number;
-}
+import type { Season, SeasonStanding } from '../../../lib/types';
 
 function shortenPubkey(key: string): string {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
 
 export default function SeasonsPage() {
-  const [leaderboard, setLeaderboard] = useState<SeasonPoints[]>([]);
+  const [season, setSeason] = useState<Season | null>(null);
+  const [leaderboard, setLeaderboard] = useState<SeasonStanding[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // For now, show a placeholder since we need an active season
-    setLoading(false);
+    void loadSeason();
   }, []);
+
+  async function loadSeason() {
+    setLoading(true);
+    try {
+      const currentSeason = await api.getCurrentSeason();
+      setSeason(currentSeason);
+      const standings = await api.getSeasonStandings(currentSeason.id);
+      setLeaderboard(standings.standings);
+    } catch (err) {
+      console.error('Failed to load season:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="min-h-screen bg-arena-bg">
@@ -36,7 +43,7 @@ export default function SeasonsPage() {
 
       <main className="max-w-7xl mx-auto px-6 py-8">
         <div className="bg-gradient-to-r from-arena-gold/10 to-arena-card border border-arena-gold/30 rounded-2xl p-8 mb-8">
-          <h2 className="text-2xl font-black mb-2">Season 1</h2>
+          <h2 className="text-2xl font-black mb-2">{season?.name ?? 'Seasonal Championship'}</h2>
           <p className="text-arena-muted mb-4">Earn points from duels, gauntlets, and clan wars. Top traders get exclusive rewards.</p>
           <div className="grid grid-cols-3 gap-4 text-center">
             <div>

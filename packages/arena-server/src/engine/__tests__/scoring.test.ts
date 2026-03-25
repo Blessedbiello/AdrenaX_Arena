@@ -263,19 +263,19 @@ describe('calculateArenaScore', () => {
 // ---------------------------------------------------------------------------
 
 describe('calculateDuelROI', () => {
-  it('returns total ROI for duel scoring', () => {
+  it('returns capital-weighted ROI for duel scoring', () => {
     const trades = [
       makeTrade({ pnl_usd: 50, fees_usd: 5, collateral_usd: 200 }),
       makeTrade({ pnl_usd: 30, fees_usd: 2, collateral_usd: 100 }),
     ];
-    expect(calculateDuelROI(trades)).toBeCloseTo(50.5);
+    expect(calculateDuelROI(trades)).toBeCloseTo(((50 - 5) + (30 - 2)) / 300 * 100);
   });
 
   it('returns 0 for no trades', () => {
     expect(calculateDuelROI([])).toBe(0);
   });
 
-  it('delegates to totalROI — single trade', () => {
+  it('returns weighted ROI for a single trade', () => {
     const trades = [makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 200 })];
     // 100/200*100 = 50%
     expect(calculateDuelROI(trades)).toBeCloseTo(50);

@@ -137,9 +137,9 @@ competitionRouter.get('/:id/stream', sseLimiter, async (req: Request, res: Respo
 // Create Gauntlet
 const CreateGauntletSchema = z.object({
   name: z.string().min(3).max(64),
-  maxParticipants: z.number().min(2).max(128).optional().default(16),
+  maxParticipants: z.number().min(64).max(128).optional().default(128),
   durationHours: z.number().min(1).max(168).optional().default(24),
-  rounds: z.number().min(1).max(5).optional().default(3),
+  rounds: z.number().min(1).max(5).optional().default(5),
   roundDurations: z.array(z.number().min(1).max(168)).optional(),
   intermissionMinutes: z.number().min(10).max(120).optional().default(30),
 }).refine(data => {

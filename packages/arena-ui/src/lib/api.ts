@@ -1,4 +1,4 @@
-import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak, RevengeWindow, Clan, ClanMember } from './types';
+import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak, RevengeWindow, Clan, ClanMember, ClanWar, Season, SeasonStanding, SeasonPassProgress, EscrowTransactionIntent } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -59,15 +59,33 @@ class ArenaAPI {
     return this.fetch(`/api/arena/duels/${id}`);
   }
 
-  async createDuel(input: CreateDuelInput): Promise<{ duel: Duel; challengeUrl: string; cardUrl: string }> {
+  async createDuel(input: CreateDuelInput): Promise<{ duel: Duel; challengeUrl: string; cardUrl: string; escrowAction: EscrowTransactionIntent | null }> {
     return this.fetch('/api/arena/duels', {
       method: 'POST',
       body: JSON.stringify(input),
     });
   }
 
-  async acceptDuel(id: string): Promise<{ duel: Duel; startTime: string; endTime: string }> {
-    return this.fetch(`/api/arena/duels/${id}/accept`, { method: 'POST' });
+  async acceptDuel(id: string, txSignature?: string): Promise<{ duel: Duel; startTime: string; endTime: string }> {
+    return this.fetch(`/api/arena/duels/${id}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(txSignature ? { txSignature } : {}),
+    });
+  }
+
+  async getChallengerEscrowIntent(id: string): Promise<EscrowTransactionIntent> {
+    return this.fetch(`/api/arena/duels/${id}/escrow/challenger-intent`, { method: 'POST' });
+  }
+
+  async confirmChallengerEscrow(id: string, txSignature: string): Promise<Duel> {
+    return this.fetch(`/api/arena/duels/${id}/escrow/challenger-confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ txSignature }),
+    });
+  }
+
+  async getDefenderEscrowIntent(id: string): Promise<EscrowTransactionIntent> {
+    return this.fetch(`/api/arena/duels/${id}/escrow/defender-intent`, { method: 'POST' });
   }
 
   async submitPrediction(duelId: string, predictedWinner: string): Promise<unknown> {
@@ -167,6 +185,58 @@ class ArenaAPI {
 
   async getClanDetails(clanId: string): Promise<{ clan: Clan; members: ClanMember[] }> {
     return this.fetch(`/api/arena/clans/${clanId}`);
+  }
+
+  async getClanWars(clanId: string): Promise<ClanWar[]> {
+    return this.fetch(`/api/arena/clans/${clanId}/wars`);
+  }
+
+  async createClanWar(input: {
+    opponentClanId: string;
+    durationHours: 24 | 48 | 168;
+    isHonorWar: boolean;
+    stakeAmount?: number;
+    stakeToken?: 'ADX' | 'USDC';
+  }): Promise<{ war: ClanWar; competitionId: string; escrowAction: EscrowTransactionIntent | null }> {
+    return this.fetch(`/api/arena/clans/${input.opponentClanId}/challenge`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  }
+
+  async getClanWarChallengerEscrowIntent(warId: string): Promise<EscrowTransactionIntent> {
+    return this.fetch(`/api/arena/clans/wars/${warId}/escrow/challenger-intent`, { method: 'POST' });
+  }
+
+  async confirmClanWarChallengerEscrow(warId: string, txSignature: string): Promise<ClanWar> {
+    return this.fetch(`/api/arena/clans/wars/${warId}/escrow/challenger-confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ txSignature }),
+    });
+  }
+
+  async getClanWarDefenderEscrowIntent(warId: string): Promise<EscrowTransactionIntent> {
+    return this.fetch(`/api/arena/clans/wars/${warId}/escrow/defender-intent`, { method: 'POST' });
+  }
+
+  async acceptClanWar(warId: string, txSignature?: string): Promise<ClanWar> {
+    return this.fetch(`/api/arena/clans/wars/${warId}/accept`, {
+      method: 'POST',
+      body: JSON.stringify(txSignature ? { txSignature } : {}),
+    });
+  }
+
+  async getCurrentSeason(): Promise<Season> {
+    return this.fetch('/api/arena/season/current');
+  }
+
+  async getSeasonStandings(seasonId?: number): Promise<{ season: Season; standings: SeasonStanding[] }> {
+    const qs = seasonId ? `?seasonId=${seasonId}` : '';
+    return this.fetch(`/api/arena/season/standings${qs}`);
+  }
+
+  async getSeasonPass(wallet: string): Promise<SeasonPassProgress> {
+    return this.fetch(`/api/arena/season/pass/${wallet}`);
   }
 }
 

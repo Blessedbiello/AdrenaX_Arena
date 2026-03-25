@@ -307,6 +307,141 @@ const migrations: Record<string, Migration> = {
       await sql`ALTER TABLE arena_competitions DROP COLUMN IF EXISTS dispute_status`.execute(db);
     },
   },
+
+  '007_clan_wars': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_clan_wars')
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('competition_id', 'uuid', col => col.notNull().references('arena_competitions.id'))
+        .addColumn('challenger_clan_id', 'uuid', col => col.notNull().references('arena_clans.id'))
+        .addColumn('defender_clan_id', 'uuid', col => col.notNull().references('arena_clans.id'))
+        .addColumn('duration_hours', 'integer', col => col.notNull())
+        .addColumn('stake_amount', sql`numeric(20,6)`, col => col.notNull().defaultTo(0))
+        .addColumn('stake_token', 'varchar(10)')
+        .addColumn('is_honor_war', 'boolean', col => col.notNull().defaultTo(true))
+        .addColumn('status', 'varchar(20)', col => col.notNull().defaultTo('pending'))
+        .addColumn('winner_clan_id', 'uuid')
+        .addColumn('accepted_at', 'timestamptz')
+        .addColumn('expires_at', 'timestamptz', col => col.notNull())
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await db.schema.createIndex('idx_clan_wars_status').on('arena_clan_wars').column('status').execute();
+      await db.schema.createIndex('idx_clan_wars_competition').on('arena_clan_wars').column('competition_id').execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_clan_wars').ifExists().execute();
+    },
+  },
+
+  '008_production_duel_escrow': {
+    async up(db: Kysely<unknown>) {
+      await sql`
+        ALTER TABLE arena_duels
+        ADD COLUMN IF NOT EXISTS escrow_state VARCHAR(40) NOT NULL DEFAULT 'not_required'
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_duels
+        ADD COLUMN IF NOT EXISTS challenger_deposit_tx VARCHAR(88)
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_duels
+        ADD COLUMN IF NOT EXISTS defender_deposit_tx VARCHAR(88)
+      `.execute(db);
+
+      await sql`
+        UPDATE arena_duels
+        SET escrow_state = CASE
+          WHEN is_honor_duel = TRUE OR COALESCE(stake_amount, 0) = 0 THEN 'not_required'
+          WHEN status IN ('completed', 'cancelled', 'expired') THEN 'cancelled'
+          ELSE 'awaiting_challenger_deposit'
+        END
+        WHERE escrow_state IS NULL OR escrow_state = 'not_required'
+      `.execute(db);
+
+      await db.schema
+        .createTable('arena_clan_cooldowns')
+        .ifNotExists()
+        .addColumn('user_pubkey', 'varchar(44)', col => col.primaryKey())
+        .addColumn('last_clan_id', 'uuid')
+        .addColumn('cooldown_until', 'timestamptz', col => col.notNull())
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_clan_cooldowns').ifExists().execute();
+      await sql`ALTER TABLE arena_duels DROP COLUMN IF EXISTS defender_deposit_tx`.execute(db);
+      await sql`ALTER TABLE arena_duels DROP COLUMN IF EXISTS challenger_deposit_tx`.execute(db);
+      await sql`ALTER TABLE arena_duels DROP COLUMN IF EXISTS escrow_state`.execute(db);
+    },
+  },
+
+  '009_season_pass_progress': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_season_pass_progress')
+        .ifNotExists()
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('season_id', 'integer', col => col.notNull().references('arena_seasons.id'))
+        .addColumn('user_pubkey', 'varchar(44)', col => col.notNull())
+        .addColumn('total_points', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('highest_milestone', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('unlocked_rewards', 'jsonb', col => col.notNull().defaultTo(sql`'[]'::jsonb`))
+        .addColumn('updated_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await sql`
+        ALTER TABLE arena_season_pass_progress
+        ADD CONSTRAINT uq_season_pass_user UNIQUE(season_id, user_pubkey)
+      `.execute(db);
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_season_pass_progress').ifExists().execute();
+    },
+  },
+
+  '010_clan_war_escrow': {
+    async up(db: Kysely<unknown>) {
+      await sql`
+        ALTER TABLE arena_clan_wars
+        ADD COLUMN IF NOT EXISTS escrow_state VARCHAR(40) NOT NULL DEFAULT 'not_required'
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_clan_wars
+        ADD COLUMN IF NOT EXISTS challenger_deposit_tx VARCHAR(88)
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_clan_wars
+        ADD COLUMN IF NOT EXISTS defender_deposit_tx VARCHAR(88)
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_clan_wars
+        ADD COLUMN IF NOT EXISTS escrow_tx VARCHAR(88)
+      `.execute(db);
+      await sql`
+        ALTER TABLE arena_clan_wars
+        ADD COLUMN IF NOT EXISTS settlement_tx VARCHAR(88)
+      `.execute(db);
+
+      await sql`
+        UPDATE arena_clan_wars
+        SET escrow_state = CASE
+          WHEN is_honor_war = TRUE OR COALESCE(stake_amount, 0) = 0 THEN 'not_required'
+          WHEN status IN ('completed', 'cancelled', 'expired') THEN 'cancelled'
+          ELSE 'awaiting_challenger_deposit'
+        END
+        WHERE escrow_state IS NULL OR escrow_state = 'not_required'
+      `.execute(db);
+    },
+    async down(db: Kysely<unknown>) {
+      await sql`ALTER TABLE arena_clan_wars DROP COLUMN IF EXISTS settlement_tx`.execute(db);
+      await sql`ALTER TABLE arena_clan_wars DROP COLUMN IF EXISTS escrow_tx`.execute(db);
+      await sql`ALTER TABLE arena_clan_wars DROP COLUMN IF EXISTS defender_deposit_tx`.execute(db);
+      await sql`ALTER TABLE arena_clan_wars DROP COLUMN IF EXISTS challenger_deposit_tx`.execute(db);
+      await sql`ALTER TABLE arena_clan_wars DROP COLUMN IF EXISTS escrow_state`.execute(db);
+    },
+  },
 };
 
 class InlineMigrationProvider implements MigrationProvider {

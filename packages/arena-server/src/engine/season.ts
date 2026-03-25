@@ -1,6 +1,14 @@
 import { sql } from 'kysely';
 import { getDb } from '../db/connection.js';
 
+export const PASS_MILESTONES = [
+  { name: 'First Blood', threshold: 1, unlock: 'Arena profile badge' },
+  { name: 'Contender', threshold: 50, unlock: '1.1x Mutagen multiplier' },
+  { name: 'Warrior', threshold: 150, unlock: 'Challenge card skin' },
+  { name: 'Elite', threshold: 300, unlock: '1.25x Mutagen multiplier' },
+  { name: 'Champion', threshold: 500, unlock: 'Seasonal title + 1.5x Mutagen multiplier' },
+] as const;
+
 /**
  * Award season points after a competition result.
  * No-op if the competition is not linked to a season.
@@ -40,6 +48,35 @@ export async function awardSeasonPoints(
       oc.columns(['season_id', 'user_pubkey']).doUpdateSet({
         total_points: sql`arena_season_points.total_points + ${points}`,
         [modeColumn]: sql`arena_season_points.${sql.ref(modeColumn)} + ${points}`,
+      })
+    )
+    .execute();
+
+  const updatedPoints = await db
+    .selectFrom('arena_season_points')
+    .where('season_id', '=', competition.season_id)
+    .where('user_pubkey', '=', userPubkey)
+    .select('total_points')
+    .executeTakeFirstOrThrow();
+
+  const totalPoints = Number(updatedPoints.total_points);
+  const unlockedRewards = PASS_MILESTONES.filter((milestone) => totalPoints >= milestone.threshold);
+
+  await db
+    .insertInto('arena_season_pass_progress')
+    .values({
+      season_id: competition.season_id,
+      user_pubkey: userPubkey,
+      total_points: totalPoints,
+      highest_milestone: unlockedRewards.length,
+      unlocked_rewards: unlockedRewards as unknown as Record<string, unknown>,
+    })
+    .onConflict((oc) =>
+      oc.columns(['season_id', 'user_pubkey']).doUpdateSet({
+        total_points: totalPoints,
+        highest_milestone: unlockedRewards.length,
+        unlocked_rewards: unlockedRewards as unknown as Record<string, unknown>,
+        updated_at: sql`NOW()`,
       })
     )
     .execute();

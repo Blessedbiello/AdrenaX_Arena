@@ -6,20 +6,20 @@ describe('calculateClanScore', () => {
     expect(calculateClanScore([])).toBe(0);
   });
 
-  it('returns score with no synergy for 1 member', () => {
-    expect(calculateClanScore([100])).toBe(100); // 100 * 1.0
+  it('applies full-profitability synergy when all members are profitable', () => {
+    expect(calculateClanScore([100])).toBe(105); // 100 * 1.05
   });
 
-  it('applies 5% synergy per extra member', () => {
-    expect(calculateClanScore([100, 100])).toBeCloseTo(105); // avg 100 * 1.05
+  it('keeps 5% synergy when every member is profitable', () => {
+    expect(calculateClanScore([100, 100])).toBeCloseTo(105);
   });
 
-  it('applies 10% synergy for 3 members', () => {
-    expect(calculateClanScore([100, 100, 100])).toBeCloseTo(110); // avg 100 * 1.10
+  it('uses the documented 5% ceiling even for larger profitable teams', () => {
+    expect(calculateClanScore([100, 100, 100])).toBeCloseTo(105);
   });
 
-  it('applies 20% synergy for 5 members', () => {
-    expect(calculateClanScore([100, 100, 100, 100, 100])).toBeCloseTo(120); // avg 100 * 1.20
+  it('does not stack synergy beyond the documented ceiling', () => {
+    expect(calculateClanScore([100, 100, 100, 100, 100])).toBeCloseTo(105);
   });
 
   it('averages different scores before applying synergy', () => {
@@ -28,7 +28,7 @@ describe('calculateClanScore', () => {
 
   it('handles negative scores', () => {
     const score = calculateClanScore([-50, 50, 100]);
-    // avg = 33.33, synergy = 1.10, total = 36.67
-    expect(score).toBeCloseTo(36.67, 1);
+    // avg = 33.33, profitable ratio = 2/3, synergy = 1.0
+    expect(score).toBeCloseTo(33.33, 1);
   });
 });
