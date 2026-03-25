@@ -1,7 +1,7 @@
 # AdrenaX Arena — Test Competition Results
 
 ## Test Environment
-- Date: 2026-03-21
+- Date: 2026-03-25
 - Node.js: v22.x
 - PostgreSQL: 16 (Docker)
 - Redis: 7 (Docker)
@@ -61,6 +61,22 @@ The `run-test-competition.ts` script validates 50+ checks across 17 test categor
 - [x] Production config refuses to start with DEV_MODE_SKIP_AUTH=true
 - [x] Adrena API schema validated against live data (29/29 fields)
 
+## Unit Test Results (93/93 passing)
+
+```
+ ✓ src/engine/__tests__/streaks.test.ts (26 tests) 9ms
+ ✓ src/engine/__tests__/duel-features.test.ts (27 tests) 18ms
+ ✓ src/engine/__tests__/scoring.test.ts (40 tests) 24ms
+
+ Test Files  3 passed (3)
+      Tests  93 passed (93)
+```
+
+Test coverage:
+- **scoring.test.ts** (40 tests): tradeROI, totalROI, arenaScore, duelROI, mutagenMultiplier, duelWinner, eligibleTrades
+- **streaks.test.ts** (26 tests): title thresholds, multiplier formula, streak progression simulation
+- **duel-features.test.ts** (27 tests): open challenge rules, revenge windows, type filters, reward calculations, API error handling, config safety
+
 ## New Features (Sprint 3-4)
 
 ### Open Challenge Board
@@ -84,14 +100,22 @@ The `run-test-competition.ts` script validates 50+ checks across 17 test categor
 - `POST /api/arena/duels/revenge` creates revenge duel
 - `GET /api/arena/duels/revenge/:wallet` checks active windows
 
+### Discord Notifications
+- Bot posts embeds on duel creation, acceptance, and settlement
+- Challenge card images embedded in Discord messages
+- Action buttons link to arena UI (View Challenge, Spectate, Watch Live)
+- Gauntlet open/results notifications
+- Graceful fallback when no bot token configured
+
 ### Infrastructure
 - Bundled Inter fonts for Docker reliability
 - Production safety: refuse to start with dev auth bypass
 - Production warnings for localhost URLs
 - Adrena API schema validated against real data with passthrough
+- Rate limiter on revenge endpoint (3 per 5 min per wallet)
+- 93 unit tests across 3 test files
 
 ## Recommendations
 - Run with real Adrena wallets on mainnet for production validation
 - Set up monitoring for the indexer worker health
-- Consider rate limiting the revenge endpoint
 - Add Sentry or similar for production error tracking
