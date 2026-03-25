@@ -252,6 +252,47 @@ export async function settleDuel(duelId: string) {
       defenderVolume,
     );
 
+    // Record settlement snapshot for audit trail
+    await trx
+      .insertInto('arena_settlement_snapshots')
+      .values({
+        competition_id: duel.competition_id,
+        snapshot_type: 'duel_settlement',
+        raw_positions: JSON.stringify({
+          challenger: challengerTrades.map((t: any) => ({
+            position_id: t.position_id,
+            symbol: t.symbol,
+            side: t.side,
+            entry_price: t.entry_price,
+            exit_price: t.exit_price,
+            collateral_usd: t.collateral_usd,
+            pnl_usd: t.pnl_usd,
+            fees_usd: t.fees_usd,
+          })),
+          defender: defenderTrades.map((t: any) => ({
+            position_id: t.position_id,
+            symbol: t.symbol,
+            side: t.side,
+            entry_price: t.entry_price,
+            exit_price: t.exit_price,
+            collateral_usd: t.collateral_usd,
+            pnl_usd: t.pnl_usd,
+            fees_usd: t.fees_usd,
+          })),
+        }),
+        computed_scores: JSON.stringify({
+          challengerROI: result.challengerROI,
+          defenderROI: result.defenderROI,
+          challengerVolume,
+          defenderVolume,
+        }),
+        settlement_result: JSON.stringify({
+          winner: result.winner,
+          reason: result.reason,
+        }),
+      })
+      .execute();
+
     // Update duel with result
     await trx
       .updateTable('arena_duels')

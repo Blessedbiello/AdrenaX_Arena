@@ -300,6 +300,37 @@ export async function settleGauntletRound(competitionId: string) {
       })
       .execute();
 
+    // Record settlement snapshot for audit trail
+    await trx
+      .insertInto('arena_settlement_snapshots')
+      .values({
+        competition_id: competitionId,
+        snapshot_type: currentRound >= competition.total_rounds ? 'gauntlet_final' : 'gauntlet_round',
+        raw_positions: JSON.stringify(
+          participants.map(p => ({
+            pubkey: p.user_pubkey,
+            arena_score: Number(p.arena_score),
+            roi_percent: Number(p.roi_percent),
+            pnl_usd: Number(p.pnl_usd),
+            positions_closed: p.positions_closed,
+            status: p.status,
+          }))
+        ),
+        computed_scores: JSON.stringify({
+          round: currentRound,
+          surviveCount,
+          activeCount: active.length,
+          forfeitedCount: forfeited.length,
+        }),
+        settlement_result: JSON.stringify({
+          surviving: surviving.map(p => p.user_pubkey),
+          eliminated: eliminated.map(p => p.user_pubkey),
+          forfeited: forfeited.map(p => p.user_pubkey),
+          isFinal: currentRound >= competition.total_rounds,
+        }),
+      })
+      .execute();
+
     const redisUrl = env.REDIS_URL;
 
     if (currentRound >= competition.total_rounds) {

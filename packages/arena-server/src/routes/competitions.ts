@@ -54,6 +54,23 @@ competitionRouter.get('/seasons/:id/leaderboard', async (req: Request, res: Resp
   }
 });
 
+// Get settlement snapshots for a competition (audit trail)
+competitionRouter.get('/:id/settlement', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const snapshots = await db
+      .selectFrom('arena_settlement_snapshots')
+      .where('competition_id', '=', req.params.id as string)
+      .orderBy('created_at', 'asc')
+      .selectAll()
+      .execute();
+    res.json({ success: true, data: snapshots });
+  } catch (err) {
+    console.error('[Competitions] Settlement snapshot error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Get competition details
 competitionRouter.get('/:id', async (req: Request, res: Response) => {
   try {
