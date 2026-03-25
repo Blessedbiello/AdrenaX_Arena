@@ -686,9 +686,9 @@ function encodeString(value: string): Buffer {
   return Buffer.concat([len, bytes]);
 }
 
-function encodeU64(value: number): Buffer {
+function encodeU64(value: bigint | number): Buffer {
   const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(BigInt(Math.trunc(value)), 0);
+  buf.writeBigUInt64LE(typeof value === 'bigint' ? value : BigInt(Math.trunc(value)), 0);
   return buf;
 }
 

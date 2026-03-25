@@ -33,7 +33,13 @@ export interface TradeForScoring {
 }
 
 /**
- * Filter trades that are eligible for scoring.
+ * Filter trades that are eligible for Gauntlet scoring.
+ * This function is used exclusively for Gauntlet competitions where only fully
+ * closed positions with both entry and exit within the competition window count.
+ * Duels use isPositionEligibleForDuel in duel.ts, which additionally supports
+ * mark-to-market valuation of open positions at settlement time.
+ *
+ * Eligibility criteria:
  * - Must have both entry and exit dates
  * - Minimum hold time (prevents wash trading)
  * - Minimum position size (prevents ROI manipulation)
@@ -73,6 +79,14 @@ export function tradeROI(trade: TradeForScoring): number {
  */
 export function totalROI(trades: TradeForScoring[]): number {
   return trades.reduce((sum, t) => sum + tradeROI(t), 0);
+}
+
+export function totalNetPnl(trades: TradeForScoring[]): number {
+  return trades.reduce((sum, trade) => sum + (trade.pnl_usd - trade.fees_usd), 0);
+}
+
+export function totalCapitalDeployed(trades: TradeForScoring[]): number {
+  return trades.reduce((sum, trade) => sum + trade.collateral_usd, 0);
 }
 
 /**
@@ -163,7 +177,9 @@ export function calculateArenaScore(
  */
 export function calculateDuelROI(trades: TradeForScoring[]): number {
   if (trades.length === 0) return 0;
-  return totalROI(trades);
+  const capital = totalCapitalDeployed(trades);
+  if (capital <= 0) return 0;
+  return (totalNetPnl(trades) / capital) * 100;
 }
 
 /**
@@ -208,22 +224,15 @@ export function determineDuelWinner(
     return { winner: challengerPubkey, challengerROI, defenderROI: 0, reason: 'defender_forfeit' };
   }
 
-  // Both traded — higher ROI wins
-  if (challengerROI > defenderROI) {
-    return { winner: challengerPubkey, challengerROI, defenderROI, reason: 'higher_roi' };
-  }
-  if (defenderROI > challengerROI) {
-    return { winner: defenderPubkey, challengerROI, defenderROI, reason: 'higher_roi' };
-  }
-
   // ROI tied to 6 decimal precision — try volume tiebreak
   const cROI6 = Math.round(challengerROI * 1e6) / 1e6;
   const dROI6 = Math.round(defenderROI * 1e6) / 1e6;
-  if (cROI6 !== dROI6) {
-    const winner = cROI6 > dROI6 ? challengerPubkey : defenderPubkey;
-    return { winner, challengerROI, defenderROI, reason: 'higher_roi_precision' };
+  if (cROI6 > dROI6) {
+    return { winner: challengerPubkey, challengerROI, defenderROI, reason: 'higher_roi' };
   }
-
+  if (dROI6 > cROI6) {
+    return { winner: defenderPubkey, challengerROI, defenderROI, reason: 'higher_roi' };
+  }
   // Volume tiebreak
   if (challengerVolume > defenderVolume) {
     return { winner: challengerPubkey, challengerROI, defenderROI, reason: 'higher_volume' };

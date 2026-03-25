@@ -350,6 +350,7 @@ duelRouter.get('/:id/stream', sseLimiter, async (req: Request, res: Response) =>
   }
 
   // Poll for updates every 5 seconds
+  let errorCount = 0;
   const interval = setInterval(async () => {
     try {
       const updated = await getDuelDetails(duelId);
@@ -365,6 +366,12 @@ duelRouter.get('/:id/stream', sseLimiter, async (req: Request, res: Response) =>
       }
     } catch (err) {
       console.error('[SSE] Duel stream error:', err);
+      errorCount++;
+      if (errorCount >= 5) {
+        res.write(`event: error\ndata: ${JSON.stringify({ message: 'Stream terminated' })}\n\n`);
+        clearInterval(interval);
+        res.end();
+      }
     }
   }, 5000);
 
