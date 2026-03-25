@@ -25,6 +25,10 @@ export interface GauntletConfig {
   rounds?: number;
   roundDurations?: number[];
   intermissionMinutes?: number;
+  registrationEnd?: string;
+  currentRoundStart?: string;
+  currentRoundEnd?: string;
+  registrationExtended?: boolean;
 }
 
 export interface ClanWarConfig {
@@ -105,6 +109,9 @@ export interface ArenaDuelsTable {
   winner_pubkey: string | null;
   challenger_roi: ColumnType<number | null, number | string | null, number | string | null>;
   defender_roi: ColumnType<number | null, number | string | null, number | string | null>;
+  escrow_state: 'not_required' | 'awaiting_challenger_deposit' | 'awaiting_defender_deposit' | 'funded' | 'settlement_pending' | 'settled' | 'refunded' | 'cancelled' | 'settlement_failed' | 'cancellation_failed';
+  challenger_deposit_tx: string | null;
+  defender_deposit_tx: string | null;
   escrow_tx: string | null;
   settlement_tx: string | null;
   challenge_card_url: string | null;
@@ -157,6 +164,16 @@ export interface ArenaSeasonPointsTable {
   clan_points: number;
 }
 
+export interface ArenaSeasonPassProgressTable {
+  id: Generated<string>;
+  season_id: number;
+  user_pubkey: string;
+  total_points: number;
+  highest_milestone: number;
+  unlocked_rewards: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  updated_at: Generated<Date>;
+}
+
 // ── Arena Clans ──
 export interface ArenaClansTable {
   id: Generated<string>;
@@ -178,6 +195,34 @@ export interface ArenaClanMembersTable {
   role: 'leader' | 'officer' | 'member';
   joined_at: Generated<Date>;
   cooldown_until: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+}
+
+export interface ArenaClanWarsTable {
+  id: Generated<string>;
+  competition_id: string;
+  challenger_clan_id: string;
+  defender_clan_id: string;
+  duration_hours: number;
+  stake_amount: ColumnType<number, number | string | undefined, number | string>;
+  stake_token: string | null;
+  is_honor_war: boolean;
+  status: 'pending' | 'active' | 'completed' | 'expired' | 'cancelled';
+  winner_clan_id: string | null;
+  escrow_state: 'not_required' | 'awaiting_challenger_deposit' | 'awaiting_defender_deposit' | 'funded' | 'settlement_pending' | 'settled' | 'refunded' | 'cancelled' | 'settlement_failed' | 'cancellation_failed';
+  challenger_deposit_tx: string | null;
+  defender_deposit_tx: string | null;
+  escrow_tx: string | null;
+  settlement_tx: string | null;
+  accepted_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+  expires_at: ColumnType<Date, string | Date, string | Date>;
+  created_at: Generated<Date>;
+}
+
+export interface ArenaClanCooldownsTable {
+  user_pubkey: string;
+  last_clan_id: string | null;
+  cooldown_until: ColumnType<Date, string | Date, string | Date>;
+  created_at: Generated<Date>;
 }
 
 // ── Arena User Stats ──
@@ -241,9 +286,12 @@ export interface DB {
   arena_round_snapshots: ArenaRoundSnapshotsTable;
   arena_rewards: ArenaRewardsTable;
   arena_season_points: ArenaSeasonPointsTable;
+  arena_season_pass_progress: ArenaSeasonPassProgressTable;
   arena_user_stats: ArenaUserStatsTable;
   arena_clans: ArenaClansTable;
   arena_clan_members: ArenaClanMembersTable;
+  arena_clan_wars: ArenaClanWarsTable;
+  arena_clan_cooldowns: ArenaClanCooldownsTable;
   arena_webhooks: ArenaWebhooksTable;
   arena_webhook_deliveries: ArenaWebhookDeliveriesTable;
   arena_settlement_snapshots: ArenaSettlementSnapshotsTable;
@@ -262,9 +310,12 @@ export type Duel = Selectable<ArenaDuelsTable>;
 export type NewDuel = Insertable<ArenaDuelsTable>;
 export type Prediction = Selectable<ArenaPredictionsTable>;
 export type Reward = Selectable<ArenaRewardsTable>;
+export type SeasonPassProgress = Selectable<ArenaSeasonPassProgressTable>;
 export type UserStats = Selectable<ArenaUserStatsTable>;
 export type Clan = Selectable<ArenaClansTable>;
 export type ClanMember = Selectable<ArenaClanMembersTable>;
+export type ClanWar = Selectable<ArenaClanWarsTable>;
+export type ClanCooldown = Selectable<ArenaClanCooldownsTable>;
 export type Webhook = Selectable<ArenaWebhooksTable>;
 export type WebhookDelivery = Selectable<ArenaWebhookDeliveriesTable>;
 export type SettlementSnapshot = Selectable<ArenaSettlementSnapshotsTable>;

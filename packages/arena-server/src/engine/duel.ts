@@ -7,6 +7,10 @@ import { updateStreaks } from './streaks.js';
 import { awardSeasonPoints } from './season.js';
 import { Redis } from 'ioredis';
 import { env } from '../config.js';
+import { validateDuelParticipant } from './anti-sybil.js';
+import { getEscrowClient } from '../solana/escrow-client.js';
+import { arenaEvents } from '../adrena/integration.js';
+import { getAdrenaClient, type AdrenaPosition } from '../adrena/client.js';
 
 export class DuelError extends Error {
   constructor(public code: string, message?: string) {
@@ -47,12 +51,29 @@ export async function createDuel(input: CreateDuelInput) {
     throw new DuelError('CANNOT_SELF_DUEL', 'Cannot challenge yourself');
   }
 
+  if (isHonorDuel && stakeAmount > 0) {
+    throw new DuelError('INVALID_DUEL_CONFIG', 'Honor duels cannot include escrow stakes');
+  }
+  if (!isHonorDuel && stakeAmount <= 0) {
+    throw new DuelError('INVALID_DUEL_CONFIG', 'Staked duels must specify a positive escrow amount');
+  }
+
+  if (!isHonorDuel && stakeAmount > 0) {
+    try {
+      getEscrowClient().assertAvailable();
+    } catch {
+      throw new DuelError('ESCROW_NOT_CONFIGURED', 'Staked duels are unavailable until escrow is configured');
+    }
+  }
+
+  await validateDuelParticipant(challengerPubkey, defenderPubkey);
+
   const now = new Date();
   // Open challenges get 24 hours to accept, direct challenges get 1 hour
   const expiresMs = defenderPubkey ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
   const expiresAt = new Date(now.getTime() + expiresMs);
 
-  return db.transaction().execute(async (trx) => {
+  const result = await db.transaction().execute(async (trx) => {
     // Create the parent competition
     const competition = await trx
       .insertInto('arena_competitions')
@@ -85,6 +106,7 @@ export async function createDuel(input: CreateDuelInput) {
         is_honor_duel: isHonorDuel,
         duration_hours: durationHours,
         status: 'pending',
+        escrow_state: !isHonorDuel && stakeAmount > 0 ? 'awaiting_challenger_deposit' : 'not_required',
         expires_at: expiresAt,
       })
       .returningAll()
@@ -102,13 +124,55 @@ export async function createDuel(input: CreateDuelInput) {
 
     return { competition, duel };
   });
+
+  return result;
 }
 
 /**
  * Accept a duel challenge.
  * Uses SELECT ... FOR UPDATE to prevent race conditions on double-accept.
  */
-export async function acceptDuel(duelId: string, defenderWallet: string) {
+export async function confirmChallengerEscrowDeposit(duelId: string, challengerWallet: string, txSignature: string) {
+  const db = getDb();
+
+  return db.transaction().execute(async (trx) => {
+    const duel = await trx
+      .selectFrom('arena_duels')
+      .where('id', '=', duelId)
+      .where('challenger_pubkey', '=', challengerWallet)
+      .where('status', '=', 'pending')
+      .forUpdate()
+      .selectAll()
+      .executeTakeFirst();
+
+    if (!duel) {
+      throw new DuelError('DUEL_NOT_AVAILABLE', 'Duel not found or no longer fundable');
+    }
+
+    if (duel.is_honor_duel || Number(duel.stake_amount) <= 0) {
+      throw new DuelError('ESCROW_NOT_REQUIRED', 'This duel does not require escrow funding');
+    }
+
+    if (duel.escrow_state !== 'awaiting_challenger_deposit') {
+      return duel;
+    }
+
+    await getEscrowClient().verifyUserEscrowSignature(txSignature, challengerWallet, duelId);
+
+    return trx
+      .updateTable('arena_duels')
+      .set({
+        challenger_deposit_tx: txSignature,
+        escrow_tx: txSignature,
+        escrow_state: 'awaiting_defender_deposit',
+      })
+      .where('id', '=', duelId)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+  });
+}
+
+export async function acceptDuel(duelId: string, defenderWallet: string, defenderDepositTxSignature?: string) {
   const db = getDb();
 
   return db.transaction().execute(async (trx) => {
@@ -133,6 +197,8 @@ export async function acceptDuel(duelId: string, defenderWallet: string) {
       throw new DuelError('WRONG_DEFENDER', 'This duel was challenged to a different wallet');
     }
 
+    await validateDuelParticipant(defenderWallet, duel.challenger_pubkey);
+
     if (new Date(duel.expires_at) < new Date()) {
       // Auto-expire
       await trx
@@ -146,6 +212,19 @@ export async function acceptDuel(duelId: string, defenderWallet: string) {
     const now = new Date();
     const endTime = new Date(now.getTime() + duel.duration_hours * 60 * 60 * 1000);
 
+    if (!duel.is_honor_duel && Number(duel.stake_amount) > 0) {
+      if (duel.escrow_state === 'awaiting_challenger_deposit') {
+        throw new DuelError('CHALLENGER_DEPOSIT_PENDING', 'The challenger must fund escrow before this duel can be accepted');
+      }
+      if (duel.escrow_state !== 'awaiting_defender_deposit') {
+        throw new DuelError('DUEL_NOT_AVAILABLE', 'This duel is not ready for defender escrow funding');
+      }
+      if (!defenderDepositTxSignature) {
+        throw new DuelError('DEFENDER_DEPOSIT_REQUIRED', 'A confirmed defender escrow deposit is required to accept this duel');
+      }
+      await getEscrowClient().verifyUserEscrowSignature(defenderDepositTxSignature, defenderWallet, duelId);
+    }
+
     // Update duel status
     const updatedDuel = await trx
       .updateTable('arena_duels')
@@ -153,6 +232,8 @@ export async function acceptDuel(duelId: string, defenderWallet: string) {
         status: 'active',
         defender_pubkey: defenderWallet,
         accepted_at: now,
+        defender_deposit_tx: defenderDepositTxSignature ?? duel.defender_deposit_tx,
+        escrow_state: !duel.is_honor_duel && Number(duel.stake_amount) > 0 ? 'funded' : duel.escrow_state,
       })
       .where('id', '=', duelId)
       .returningAll()
@@ -216,20 +297,25 @@ export async function settleDuel(duelId: string) {
       throw new DuelError('DUEL_NOT_SETTLEABLE', 'Duel not found or not active');
     }
 
+    if (!duel.defender_pubkey) {
+      throw new DuelError('DUEL_NOT_SETTLEABLE', 'Duel has no defender and cannot be settled');
+    }
+
     const competition = await trx
       .selectFrom('arena_competitions')
       .where('id', '=', duel.competition_id)
       .selectAll()
       .executeTakeFirstOrThrow();
 
-    // Fetch eligible trades for both participants
+    // Fetch eligible positions for both participants, including open positions
+    // that must be marked to market at duel expiry.
     const startTime = new Date(competition.start_time);
     const endTime = new Date(competition.end_time);
 
     const [challengerTrades, defenderTrades] = await Promise.all([
-      getEligibleTrades(trx, duel.competition_id, duel.challenger_pubkey, startTime, endTime),
+      getEligibleDuelPositions(duel.challenger_pubkey, duel.asset_symbol, startTime, endTime),
       duel.defender_pubkey
-        ? getEligibleTrades(trx, duel.competition_id, duel.defender_pubkey, startTime, endTime)
+        ? getEligibleDuelPositions(duel.defender_pubkey, duel.asset_symbol, startTime, endTime)
         : Promise.resolve([]),
     ]);
 
@@ -240,8 +326,8 @@ export async function settleDuel(duelId: string) {
     const defenderTradesForScoring = defenderTrades.map(toScoringTrade);
 
     // Compute notional volume for tiebreaking
-    const challengerVolume = challengerTrades.reduce((sum: number, t: any) => sum + Number(t.collateral_usd || 0), 0);
-    const defenderVolume = defenderTrades.reduce((sum: number, t: any) => sum + Number(t.collateral_usd || 0), 0);
+    const challengerVolume = challengerTrades.reduce((sum: number, t) => sum + t.volumeUsd, 0);
+    const defenderVolume = defenderTrades.reduce((sum: number, t) => sum + t.volumeUsd, 0);
 
     const result = determineDuelWinner(
       challengerTradesForScoring,
@@ -263,21 +349,27 @@ export async function settleDuel(duelId: string) {
             position_id: t.position_id,
             symbol: t.symbol,
             side: t.side,
-            entry_price: t.entry_price,
-            exit_price: t.exit_price,
-            collateral_usd: t.collateral_usd,
-            pnl_usd: t.pnl_usd,
-            fees_usd: t.fees_usd,
+            entry_price: t.entryPrice,
+            exit_price: t.exitPrice,
+            collateral_usd: t.collateralUsd,
+            pnl_usd: t.pnlUsd,
+            fees_usd: t.feesUsd,
+            volume_usd: t.volumeUsd,
+            is_marked_to_market: t.isMarkedToMarket,
+            settled_at: endTime.toISOString(),
           })),
           defender: defenderTrades.map((t: any) => ({
             position_id: t.position_id,
             symbol: t.symbol,
             side: t.side,
-            entry_price: t.entry_price,
-            exit_price: t.exit_price,
-            collateral_usd: t.collateral_usd,
-            pnl_usd: t.pnl_usd,
-            fees_usd: t.fees_usd,
+            entry_price: t.entryPrice,
+            exit_price: t.exitPrice,
+            collateral_usd: t.collateralUsd,
+            pnl_usd: t.pnlUsd,
+            fees_usd: t.feesUsd,
+            volume_usd: t.volumeUsd,
+            is_marked_to_market: t.isMarkedToMarket,
+            settled_at: endTime.toISOString(),
           })),
         }),
         computed_scores: JSON.stringify({
@@ -285,6 +377,8 @@ export async function settleDuel(duelId: string) {
           defenderROI: result.defenderROI,
           challengerVolume,
           defenderVolume,
+          settlement_delay_seconds: Math.round((Date.now() - endTime.getTime()) / 1000),
+          settlement_note: 'Mark-to-market uses live PnL at settlement time. settlement_delay_seconds records the gap for auditing.',
         }),
         settlement_result: JSON.stringify({
           winner: result.winner,
@@ -340,32 +434,6 @@ export async function settleDuel(duelId: string) {
         await awardSeasonPoints(duel.competition_id, result.winner, 10, 'duel');
       }
 
-      // Create reward entries for staked duels
-      if (!duel.is_honor_duel && Number(duel.stake_amount) > 0) {
-        const totalStake = Number(duel.stake_amount) * 2;
-        const protocolFee = totalStake * 0.02;
-        const winnerPrize = totalStake - protocolFee;
-
-        await trx
-          .insertInto('arena_rewards')
-          .values([
-            {
-              competition_id: duel.competition_id,
-              user_pubkey: result.winner,
-              amount: winnerPrize,
-              token: duel.stake_token,
-              reward_type: 'prize',
-            },
-            {
-              competition_id: duel.competition_id,
-              user_pubkey: 'protocol',
-              amount: protocolFee,
-              token: duel.stake_token,
-              reward_type: 'protocol_fee',
-            },
-          ])
-          .execute();
-      }
     } else if (result.reason === 'draw') {
       // Draw — mark both as eliminated, refund stakes (no protocol fee)
       await trx
@@ -373,19 +441,6 @@ export async function settleDuel(duelId: string) {
         .set({ status: 'eliminated' })
         .where('competition_id', '=', duel.competition_id)
         .execute();
-
-      if (!duel.is_honor_duel && Number(duel.stake_amount) > 0) {
-        const refundEntries = [duel.challenger_pubkey, duel.defender_pubkey].filter(Boolean).map(pubkey => ({
-          competition_id: duel.competition_id,
-          user_pubkey: pubkey!,
-          amount: Number(duel.stake_amount),
-          token: duel.stake_token,
-          reward_type: 'prize' as const,
-        }));
-        if (refundEntries.length > 0) {
-          await trx.insertInto('arena_rewards').values(refundEntries).execute();
-        }
-      }
     } else {
       // Both forfeit — mark both as forfeited
       await trx
@@ -436,9 +491,6 @@ export async function settleDuel(duelId: string) {
       ]);
     });
 
-    // Schedule reward processing
-    await scheduleRewardProcessing(redisUrl, duel.competition_id);
-
     // Settle predictions
     if (result.winner) {
       await trx
@@ -454,18 +506,100 @@ export async function settleDuel(duelId: string) {
         .where('duel_id', '=', duelId)
         .where('predicted_winner', '!=', result.winner)
         .execute();
+
+      const correctPredictions = await trx
+        .selectFrom('arena_predictions')
+        .where('duel_id', '=', duelId)
+        .where('predicted_winner', '=', result.winner)
+        .select(['predictor_pubkey', 'mutagen_reward'])
+        .execute();
+
+      if (correctPredictions.length > 0) {
+        await trx
+          .insertInto('arena_rewards')
+          .values(correctPredictions.map(prediction => ({
+            competition_id: duel.competition_id,
+            user_pubkey: prediction.predictor_pubkey,
+            amount: Number(prediction.mutagen_reward),
+            token: 'MUTAGEN',
+            reward_type: 'prediction' as const,
+          })))
+          .execute();
+      }
     }
 
-    return { duel: { ...duel, ...result }, result };
+    const rewardCount = await trx
+      .selectFrom('arena_rewards')
+      .where('competition_id', '=', duel.competition_id)
+      .where('tx_signature', 'is', null)
+      .select(sql<number>`COUNT(*)`.as('count'))
+      .executeTakeFirstOrThrow();
+
+    return {
+      duel: { ...duel, ...result },
+      result,
+      competitionId: duel.competition_id,
+      shouldProcessRewards: Number(rewardCount.count) > 0,
+    };
   });
 
+  if (txResult.shouldProcessRewards) {
+    await scheduleRewardProcessing(env.REDIS_URL, txResult.competitionId);
+  }
+
+  const duelData = txResult.duel;
+  const winnerPubkey = txResult.result.winner;
+  const loserPubkey = winnerPubkey === duelData.challenger_pubkey
+    ? duelData.defender_pubkey
+    : winnerPubkey
+      ? duelData.challenger_pubkey
+      : null;
+
+  if (!duelData.is_honor_duel && Number(duelData.stake_amount) > 0) {
+    await db
+      .updateTable('arena_duels')
+      .set({ escrow_state: 'settlement_pending' })
+      .where('id', '=', duelId)
+      .execute();
+
+    try {
+      let settlementTx: string | null = null;
+      if (winnerPubkey) {
+        settlementTx = await getEscrowClient().settleDuelWinner(
+          { competitionId: duelId, mint: duelData.stake_token as 'ADX' | 'USDC' },
+          winnerPubkey,
+          winnerPubkey === duelData.challenger_pubkey ? 'side_a' : 'side_b',
+        );
+      } else if (txResult.result.reason === 'draw' || txResult.result.reason === 'both_forfeit') {
+        settlementTx = await getEscrowClient().refundVoidDuel(
+          { competitionId: duelId, mint: duelData.stake_token as 'ADX' | 'USDC' },
+          duelData.challenger_pubkey,
+          duelData.defender_pubkey ?? duelData.challenger_pubkey,
+        );
+      }
+
+      const finalEscrowState = winnerPubkey ? 'settled' : 'refunded';
+      await db
+        .updateTable('arena_duels')
+        .set({
+          settlement_tx: settlementTx,
+          escrow_state: finalEscrowState,
+        })
+        .where('id', '=', duelId)
+        .execute();
+      txResult.duel.settlement_tx = settlementTx;
+    } catch (escrowErr) {
+      console.error(`[Duel] On-chain settlement failed for ${duelId}:`, (escrowErr as Error).message);
+      await db
+        .updateTable('arena_duels')
+        .set({ escrow_state: 'settlement_failed' })
+        .where('id', '=', duelId)
+        .execute();
+    }
+  }
+
   // Create revenge window AFTER transaction commits (avoid two-phase commit risk)
-  if (txResult.result.winner) {
-    const duelData = txResult.duel;
-    const winnerPubkey = txResult.result.winner;
-    const loserPubkey = winnerPubkey === duelData.challenger_pubkey
-      ? duelData.defender_pubkey
-      : duelData.challenger_pubkey;
+  if (winnerPubkey) {
     if (loserPubkey) {
       try {
         const redis = new Redis(env.REDIS_URL);
@@ -483,6 +617,20 @@ export async function settleDuel(duelId: string) {
     }
   }
 
+  arenaEvents.emit('duel_settled', {
+    type: 'duel_settled',
+    timestamp: new Date(),
+    payload: {
+      duelId,
+      competitionId: txResult.competitionId,
+      winnerPubkey,
+      loserPubkey,
+      challengerROI: txResult.result.challengerROI,
+      defenderROI: txResult.result.defenderROI,
+      isDraw: txResult.result.reason === 'draw',
+    },
+  });
+
   return txResult;
 }
 
@@ -492,10 +640,18 @@ export async function settleDuel(duelId: string) {
 export async function expireStaleDuels() {
   const db = getDb();
   const now = new Date();
+  const escrowClient = getEscrowClient();
 
   const expired = await db
     .updateTable('arena_duels')
-    .set({ status: 'expired' })
+    .set({
+      status: 'expired',
+      escrow_state: sql`CASE
+        WHEN is_honor_duel = TRUE OR COALESCE(stake_amount, 0) = 0 THEN escrow_state
+        WHEN challenger_deposit_tx IS NULL THEN 'cancelled'
+        ELSE escrow_state
+      END`,
+    })
     .where('status', '=', 'pending')
     .where('expires_at', '<', now)
     .returningAll()
@@ -503,6 +659,22 @@ export async function expireStaleDuels() {
 
   // Also cancel the parent competitions
   for (const duel of expired) {
+    if (!duel.is_honor_duel && Number(duel.stake_amount) > 0 && duel.challenger_deposit_tx) {
+      try {
+        const settlementTx = await escrowClient.cancelExpiredDuel(
+          { competitionId: duel.id, mint: duel.stake_token as 'ADX' | 'USDC' },
+          duel.challenger_pubkey,
+          duel.defender_pubkey ?? duel.challenger_pubkey,
+        );
+        if (settlementTx) {
+          await db.updateTable('arena_duels').set({ settlement_tx: settlementTx, escrow_state: 'cancelled' }).where('id', '=', duel.id).execute();
+        }
+      } catch (err) {
+        console.error(`[Duel] Escrow cancel failed for ${duel.id}:`, (err as Error).message);
+        await db.updateTable('arena_duels').set({ escrow_state: 'cancellation_failed' }).where('id', '=', duel.id).execute();
+      }
+    }
+
     await db
       .updateTable('arena_competitions')
       .set({ status: 'cancelled', updated_at: now })
@@ -623,37 +795,100 @@ export async function getRevengeWindows(wallet: string) {
 
 // ── Helpers ──
 
-async function getEligibleTrades(
-  trx: any,
-  competitionId: string,
-  userPubkey: string,
-  startTime: Date,
-  endTime: Date
-) {
-  return trx
-    .selectFrom('arena_trades')
-    .where('competition_id', '=', competitionId)
-    .where('user_pubkey', '=', userPubkey)
-    .where('exit_date', 'is not', null)
-    .where('entry_date', '>=', startTime)
-    .where('exit_date', '<=', endTime)
-    .where('collateral_usd', '>=', 50)
-    .where(
-      sql`EXTRACT(EPOCH FROM (exit_date - entry_date))`,
-      '>=',
-      60
-    )
-    .selectAll()
-    .execute();
+interface DuelPositionSnapshot {
+  position_id: number;
+  symbol: string;
+  side: 'long' | 'short';
+  entryPrice: number | null;
+  exitPrice: number | null;
+  collateralUsd: number;
+  pnlUsd: number;
+  feesUsd: number;
+  volumeUsd: number;
+  entryDate: Date;
+  exitDate: Date | null;
+  isMarkedToMarket: boolean;
 }
 
-function toScoringTrade(trade: any) {
+async function getEligibleDuelPositions(
+  userPubkey: string,
+  assetSymbol: string,
+  startTime: Date,
+  endTime: Date
+): Promise<DuelPositionSnapshot[]> {
+  const client = getAdrenaClient();
+  const positions = await client.fetchPositions(userPubkey);
+  const normalizedAsset = assetSymbol.toUpperCase();
+
+  return positions
+    .filter((position) => isPositionEligibleForDuel(position, normalizedAsset, startTime, endTime))
+    .map((position) => toDuelPositionSnapshot(position, endTime));
+}
+
+function toScoringTrade(trade: DuelPositionSnapshot) {
   return {
-    pnl_usd: Number(trade.pnl_usd) || 0,
-    fees_usd: Number(trade.fees_usd) || 0,
-    collateral_usd: Number(trade.collateral_usd) || 0,
-    entry_date: new Date(trade.entry_date),
-    exit_date: new Date(trade.exit_date),
+    pnl_usd: trade.pnlUsd,
+    fees_usd: trade.feesUsd,
+    collateral_usd: trade.collateralUsd,
+    entry_date: trade.entryDate,
+    exit_date: trade.exitDate ?? new Date(),
+  };
+}
+
+function isPositionEligibleForDuel(
+  position: AdrenaPosition,
+  assetSymbol: string,
+  startTime: Date,
+  endTime: Date
+): boolean {
+  if (!position.entry_date) return false;
+
+  const entryDate = new Date(position.entry_date);
+  if (entryDate < startTime || entryDate > endTime) return false;
+
+  if (assetSymbol !== 'ANY' && position.symbol.toUpperCase() !== assetSymbol) {
+    return false;
+  }
+
+  const collateralUsd = Number(position.entry_collateral_amount ?? position.collateral_amount ?? 0);
+  if (collateralUsd < 50) return false;
+
+  const exitDate = position.exit_date ? new Date(position.exit_date) : null;
+  const durationSeconds = exitDate ? (exitDate.getTime() - entryDate.getTime()) / 1000 : 60;
+  if (durationSeconds < 60) return false;
+
+  const isClosedInsideWindow = (
+    (position.status === 'close' || position.status === 'liquidated') &&
+    exitDate !== null &&
+    exitDate <= endTime
+  );
+  const isOpenAtExpiry = (
+    (position.status === 'open' || position.status === 'opening' || position.status === 'closing') &&
+    (exitDate === null || exitDate > endTime)
+  );
+
+  return isClosedInsideWindow || isOpenAtExpiry;
+}
+
+function toDuelPositionSnapshot(position: AdrenaPosition, settleAt: Date): DuelPositionSnapshot {
+  const collateralUsd = Number(position.entry_collateral_amount ?? position.collateral_amount ?? 0);
+  const feesUsd = Number(position.fees ?? 0);
+  const exitDate = position.exit_date ? new Date(position.exit_date) : null;
+  const isMarkedToMarket = position.status === 'open' || position.status === 'opening' || position.status === 'closing' || (exitDate !== null && exitDate > settleAt);
+
+  return {
+    position_id: position.position_id,
+    symbol: position.symbol,
+    side: position.side,
+    entryPrice: position.entry_price ?? null,
+    exitPrice: position.exit_price ?? null,
+    collateralUsd,
+    pnlUsd: Number(position.pnl ?? 0),
+    feesUsd,
+    volumeUsd: Number(position.volume ?? position.entry_size ?? collateralUsd),
+    entryDate: new Date(position.entry_date!),
+    exitDate: isMarkedToMarket ? settleAt : exitDate,
+    isMarkedToMarket,
   };
 }
 
