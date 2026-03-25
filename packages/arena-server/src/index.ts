@@ -13,6 +13,8 @@ import { startIndexerWorker, closeIndexer } from './engine/indexer.js';
 import { startRewardWorker, closeRewardWorker } from './rewards/distributor.js';
 import { closeAuthRedis } from './middleware/auth.js';
 import { expireStaleDuels } from './engine/duel.js';
+import { initDiscordBot, destroyDiscordBot, postDuelChallenge, postDuelAccepted, postDuelResult } from './discord/bot.js';
+import { arenaEvents } from './adrena/integration.js';
 
 const app = express();
 
@@ -146,6 +148,55 @@ async function startBackgroundJobs() {
     console.warn('[Worker] Failed to start reward worker:', (err as Error).message);
   }
 
+  // Initialize Discord bot
+  try {
+    await initDiscordBot();
+  } catch (err) {
+    console.warn('[Discord] Failed to initialize:', (err as Error).message);
+  }
+
+  // Wire arena events to Discord notifications
+  arenaEvents.on('duel_created', (event) => {
+    const p = event.payload;
+    postDuelChallenge({
+      id: p.duelId,
+      challenger_pubkey: p.challengerPubkey,
+      defender_pubkey: p.defenderPubkey || null,
+      asset_symbol: p.assetSymbol,
+      stake_amount: p.stakeAmount,
+      stake_token: p.stakeToken,
+      is_honor_duel: p.isHonorDuel,
+      duration_hours: p.durationHours,
+    }).catch(() => {});
+  });
+
+  arenaEvents.on('duel_accepted', (event) => {
+    const p = event.payload;
+    postDuelAccepted({
+      id: p.duelId,
+      challenger_pubkey: p.challengerPubkey,
+      defender_pubkey: p.defenderPubkey,
+      asset_symbol: '', // Not in event payload, Discord embed handles gracefully
+      duration_hours: 0,
+    }).catch(() => {});
+  });
+
+  arenaEvents.on('duel_settled', (event) => {
+    const p = event.payload;
+    postDuelResult({
+      id: p.duelId,
+      challenger_pubkey: '', // Fetched from duel in production
+      defender_pubkey: null,
+      asset_symbol: '',
+      winner_pubkey: p.winnerPubkey,
+      challenger_roi: p.challengerROI,
+      defender_roi: p.defenderROI,
+      is_honor_duel: false,
+      stake_amount: 0,
+      stake_token: 'ADX',
+    }).catch(() => {});
+  });
+
   // Expire stale duels every minute
   expireInterval = setInterval(async () => {
     try {
@@ -164,6 +215,7 @@ async function shutdown() {
   await closeIndexer();
   await closeRewardWorker();
   await closeAuthRedis();
+  await destroyDiscordBot();
   server.close();
   await closeDb();
   process.exit(0);
