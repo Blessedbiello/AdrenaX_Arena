@@ -238,11 +238,17 @@ export async function settleDuel(duelId: string) {
     const challengerTradesForScoring = challengerTrades.map(toScoringTrade);
     const defenderTradesForScoring = defenderTrades.map(toScoringTrade);
 
+    // Compute notional volume for tiebreaking
+    const challengerVolume = challengerTrades.reduce((sum: number, t: any) => sum + Number(t.collateral_usd || 0), 0);
+    const defenderVolume = defenderTrades.reduce((sum: number, t: any) => sum + Number(t.collateral_usd || 0), 0);
+
     const result = determineDuelWinner(
       challengerTradesForScoring,
       defenderTradesForScoring,
       duel.challenger_pubkey,
-      duel.defender_pubkey ?? ''
+      duel.defender_pubkey ?? '',
+      challengerVolume,
+      defenderVolume,
     );
 
     // Update duel with result
@@ -314,6 +320,26 @@ export async function settleDuel(duelId: string) {
             },
           ])
           .execute();
+      }
+    } else if (result.reason === 'draw') {
+      // Draw — mark both as eliminated, refund stakes (no protocol fee)
+      await trx
+        .updateTable('arena_participants')
+        .set({ status: 'eliminated' })
+        .where('competition_id', '=', duel.competition_id)
+        .execute();
+
+      if (!duel.is_honor_duel && Number(duel.stake_amount) > 0) {
+        const refundEntries = [duel.challenger_pubkey, duel.defender_pubkey].filter(Boolean).map(pubkey => ({
+          competition_id: duel.competition_id,
+          user_pubkey: pubkey!,
+          amount: Number(duel.stake_amount),
+          token: duel.stake_token,
+          reward_type: 'prize' as const,
+        }));
+        if (refundEntries.length > 0) {
+          await trx.insertInto('arena_rewards').values(refundEntries).execute();
+        }
       }
     } else {
       // Both forfeit — mark both as forfeited
