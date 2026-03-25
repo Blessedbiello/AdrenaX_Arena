@@ -181,6 +181,8 @@ adminRouter.post('/escrow/resume', async (_req: Request, res: Response) => {
 });
 
 // Force-settle a duel (for testing — bypasses scheduled settlement)
+// If the Adrena API has no positions for test wallets, the admin can
+// pass ?useDbTrades=true to use arena_trades table instead of live API
 adminRouter.post('/duels/:id/settle', async (req: Request, res: Response) => {
   try {
     const { settleDuel } = await import('../engine/duel.js');
