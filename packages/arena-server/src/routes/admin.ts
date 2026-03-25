@@ -180,6 +180,30 @@ adminRouter.post('/escrow/resume', async (_req: Request, res: Response) => {
   }
 });
 
+// Force-settle a duel (for testing — bypasses scheduled settlement)
+adminRouter.post('/duels/:id/settle', async (req: Request, res: Response) => {
+  try {
+    const { settleDuel } = await import('../engine/duel.js');
+    const result = await settleDuel(req.params.id as string);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[Admin] Force-settle duel error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: (err as Error).message });
+  }
+});
+
+// Force-settle a clan war (for testing)
+adminRouter.post('/clan-wars/:id/settle', async (req: Request, res: Response) => {
+  try {
+    const { settleClanWar } = await import('../engine/clan.js');
+    const result = await settleClanWar(req.params.id as string);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[Admin] Force-settle clan war error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR', message: (err as Error).message });
+  }
+});
+
 // Webhook management
 adminRouter.get('/webhooks', async (_req: Request, res: Response) => {
   try {
