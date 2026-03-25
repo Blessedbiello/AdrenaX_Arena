@@ -12,6 +12,18 @@ const envSchema = z.object({
   DISCORD_CHANNEL_ID: z.string().optional(),
   CHALLENGE_CARD_BASE_URL: z.string().default('http://localhost:3001'),
   CORS_ORIGIN: z.string().default('http://localhost:3001'),
+  SOLANA_RPC_URL: z.string().default('http://localhost:8899'),
+  PROGRAM_ID: z.string().optional(),
+  TREASURY_PUBKEY: z.string().optional(),
+  OPERATOR_KEYPAIR_PATH: z.string().optional(),
+  ADMIN_API_KEY: z.string().optional(),
+  ADMIN_WALLETS: z.string().optional(),
+  ADRENA_MUTAGEN_API_URL: z.string().optional(),
+  ADRENA_QUEST_WEBHOOK_URL: z.string().optional(),
+  ADRENA_LEADERBOARD_API_URL: z.string().optional(),
+  ENABLE_SYBIL_CHECKS: z.coerce.boolean().default(false),
+  MIN_WALLET_AGE_DAYS: z.coerce.number().default(7),
+  MIN_CLOSED_POSITIONS: z.coerce.number().default(3),
 });
 
 export type Env = z.infer<typeof envSchema>;
