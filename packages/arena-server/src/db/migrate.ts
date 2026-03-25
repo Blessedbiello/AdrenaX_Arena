@@ -234,6 +234,79 @@ const migrations: Record<string, Migration> = {
       await db.schema.dropTable('arena_clans').ifExists().execute();
     },
   },
+
+  '004_webhooks': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_webhooks')
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('url', 'text', col => col.notNull())
+        .addColumn('events', sql`TEXT[]`, col => col.notNull())
+        .addColumn('secret', 'varchar(128)', col => col.notNull())
+        .addColumn('active', 'boolean', col => col.notNull().defaultTo(true))
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await db.schema
+        .createTable('arena_webhook_deliveries')
+        .addColumn('id', 'serial', col => col.primaryKey())
+        .addColumn('webhook_id', 'uuid', col => col.notNull().references('arena_webhooks.id'))
+        .addColumn('event_type', 'varchar(32)', col => col.notNull())
+        .addColumn('payload', 'jsonb', col => col.notNull())
+        .addColumn('status', 'varchar(10)', col => col.notNull().defaultTo('pending'))
+        .addColumn('attempts', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('last_attempt_at', 'timestamptz')
+        .addColumn('next_retry_at', 'timestamptz')
+        .addColumn('response_status', 'integer')
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await db.schema.createIndex('idx_webhook_deliveries_retry')
+        .on('arena_webhook_deliveries')
+        .columns(['status', 'next_retry_at'])
+        .execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_webhook_deliveries').ifExists().execute();
+      await db.schema.dropTable('arena_webhooks').ifExists().execute();
+    },
+  },
+
+  '005_settlement_snapshots': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_settlement_snapshots')
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('competition_id', 'uuid', col => col.notNull().references('arena_competitions.id'))
+        .addColumn('snapshot_type', 'varchar(20)', col => col.notNull())
+        .addColumn('raw_positions', 'jsonb', col => col.notNull())
+        .addColumn('computed_scores', 'jsonb', col => col.notNull())
+        .addColumn('settlement_result', 'jsonb', col => col.notNull())
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await db.schema.createIndex('idx_settlement_snap_comp')
+        .on('arena_settlement_snapshots')
+        .column('competition_id')
+        .execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_settlement_snapshots').ifExists().execute();
+    },
+  },
+
+  '006_admin': {
+    async up(db: Kysely<unknown>) {
+      await sql`ALTER TABLE arena_user_stats ADD COLUMN IF NOT EXISTS banned_at TIMESTAMPTZ`.execute(db);
+      await sql`ALTER TABLE arena_user_stats ADD COLUMN IF NOT EXISTS banned_reason TEXT`.execute(db);
+      await sql`ALTER TABLE arena_competitions ADD COLUMN IF NOT EXISTS dispute_status VARCHAR(20)`.execute(db);
+    },
+    async down(db: Kysely<unknown>) {
+      await sql`ALTER TABLE arena_user_stats DROP COLUMN IF EXISTS banned_at`.execute(db);
+      await sql`ALTER TABLE arena_user_stats DROP COLUMN IF EXISTS banned_reason`.execute(db);
+      await sql`ALTER TABLE arena_competitions DROP COLUMN IF EXISTS dispute_status`.execute(db);
+    },
+  },
 };
 
 class InlineMigrationProvider implements MigrationProvider {

@@ -46,6 +46,7 @@ export interface ArenaCompetitionsTable {
   current_round: number;
   total_rounds: number;
   config: ColumnType<CompetitionConfig, string | CompetitionConfig, string | CompetitionConfig>;
+  dispute_status: string | null;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
@@ -189,7 +190,44 @@ export interface ArenaUserStatsTable {
   total_losses: number;
   title: string | null;
   mutagen_multiplier: ColumnType<number, number | string, number | string>;
+  banned_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+  banned_reason: string | null;
   updated_at: Generated<Date>;
+}
+
+// ── Arena Webhooks ──
+export interface ArenaWebhooksTable {
+  id: Generated<string>;
+  url: string;
+  events: string[];
+  secret: string;
+  active: boolean;
+  created_at: Generated<Date>;
+}
+
+// ── Arena Webhook Deliveries ──
+export interface ArenaWebhookDeliveriesTable {
+  id: Generated<number>;
+  webhook_id: string;
+  event_type: string;
+  payload: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  status: 'pending' | 'sent' | 'failed' | 'dead';
+  attempts: number;
+  last_attempt_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+  next_retry_at: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+  response_status: number | null;
+  created_at: Generated<Date>;
+}
+
+// ── Arena Settlement Snapshots ──
+export interface ArenaSettlementSnapshotsTable {
+  id: Generated<string>;
+  competition_id: string;
+  snapshot_type: string;
+  raw_positions: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  computed_scores: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  settlement_result: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  created_at: Generated<Date>;
 }
 
 // ── Database Interface ──
@@ -206,6 +244,9 @@ export interface DB {
   arena_user_stats: ArenaUserStatsTable;
   arena_clans: ArenaClansTable;
   arena_clan_members: ArenaClanMembersTable;
+  arena_webhooks: ArenaWebhooksTable;
+  arena_webhook_deliveries: ArenaWebhookDeliveriesTable;
+  arena_settlement_snapshots: ArenaSettlementSnapshotsTable;
 }
 
 // Export helper types
@@ -224,3 +265,6 @@ export type Reward = Selectable<ArenaRewardsTable>;
 export type UserStats = Selectable<ArenaUserStatsTable>;
 export type Clan = Selectable<ArenaClansTable>;
 export type ClanMember = Selectable<ArenaClanMembersTable>;
+export type Webhook = Selectable<ArenaWebhooksTable>;
+export type WebhookDelivery = Selectable<ArenaWebhookDeliveriesTable>;
+export type SettlementSnapshot = Selectable<ArenaSettlementSnapshotsTable>;
