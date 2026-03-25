@@ -114,6 +114,11 @@ class ArenaAPI {
     return this.fetch(`/api/arena/users/${wallet}/streak`);
   }
 
+  async getLeaderboard(period?: 'weekly' | 'monthly' | 'all'): Promise<Array<{ rank: number; wallet: string; wins: number; losses: number; winRate: number; totalROI: number; duelsPlayed: number }>> {
+    const qs = period ? `?period=${period}` : '';
+    return this.fetch(`/api/arena/users/leaderboard${qs}`);
+  }
+
   // Revenge
   async createRevengeDuel(opponentPubkey: string): Promise<{ duel: Duel; competition: Competition }> {
     return this.fetch('/api/arena/duels/revenge', {

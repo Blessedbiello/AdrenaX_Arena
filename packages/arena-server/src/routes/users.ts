@@ -18,6 +18,81 @@ userRouter.get('/nonce/:wallet', async (req: Request, res: Response) => {
   res.json({ success: true, data: { nonce, message: `AdrenaX Arena Authentication\nNonce: ${nonce}` } });
 });
 
+// Get arena leaderboard
+userRouter.get('/leaderboard', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const period = (req.query.period as string) || 'all';
+
+    // Build base query: aggregate duel stats per user
+    let query = db
+      .selectFrom('arena_duels')
+      .where('status', '=', 'completed')
+      .where('winner_pubkey', 'is not', null);
+
+    // Time filter
+    if (period === 'weekly') {
+      query = query.where('created_at', '>=', sql<Date>`NOW() - INTERVAL '7 days'`);
+    } else if (period === 'monthly') {
+      query = query.where('created_at', '>=', sql<Date>`NOW() - INTERVAL '30 days'`);
+    }
+
+    const duels = await query.selectAll().execute();
+
+    // Aggregate stats per wallet
+    const statsMap = new Map<string, { wins: number; losses: number; totalROI: number; duelsPlayed: number }>();
+
+    for (const duel of duels) {
+      // Winner stats
+      const winner = duel.winner_pubkey!;
+      if (!statsMap.has(winner)) {
+        statsMap.set(winner, { wins: 0, losses: 0, totalROI: 0, duelsPlayed: 0 });
+      }
+      const winnerStats = statsMap.get(winner)!;
+      winnerStats.wins++;
+      winnerStats.duelsPlayed++;
+      const winnerROI = winner === duel.challenger_pubkey
+        ? Number(duel.challenger_roi || 0)
+        : Number(duel.defender_roi || 0);
+      winnerStats.totalROI += winnerROI;
+
+      // Loser stats
+      const loser = winner === duel.challenger_pubkey ? duel.defender_pubkey : duel.challenger_pubkey;
+      if (loser) {
+        if (!statsMap.has(loser)) {
+          statsMap.set(loser, { wins: 0, losses: 0, totalROI: 0, duelsPlayed: 0 });
+        }
+        const loserStats = statsMap.get(loser)!;
+        loserStats.losses++;
+        loserStats.duelsPlayed++;
+        const loserROI = loser === duel.challenger_pubkey
+          ? Number(duel.challenger_roi || 0)
+          : Number(duel.defender_roi || 0);
+        loserStats.totalROI += loserROI;
+      }
+    }
+
+    // Convert to sorted array
+    const leaderboard = Array.from(statsMap.entries())
+      .map(([wallet, stats]) => ({
+        wallet,
+        wins: stats.wins,
+        losses: stats.losses,
+        winRate: stats.duelsPlayed > 0 ? stats.wins / stats.duelsPlayed : 0,
+        totalROI: Math.round(stats.totalROI * 100) / 100,
+        duelsPlayed: stats.duelsPlayed,
+      }))
+      .sort((a, b) => b.wins - a.wins || b.totalROI - a.totalROI)
+      .slice(0, 50)
+      .map((entry, i) => ({ rank: i + 1, ...entry }));
+
+    res.json({ success: true, data: leaderboard });
+  } catch (err) {
+    console.error('[Users] Leaderboard error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Get user streak stats
 userRouter.get('/:wallet/streak', async (req: Request, res: Response) => {
   try {
