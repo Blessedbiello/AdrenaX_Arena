@@ -5,8 +5,8 @@ import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
 import { updateStreaks } from './streaks.js';
 import { awardSeasonPoints } from './season.js';
-import { Redis } from 'ioredis';
 import { env } from '../config.js';
+import { getSharedRedis, hashToInt } from './utils.js';
 import { validateDuelParticipant } from './anti-sybil.js';
 import { getEscrowClient } from '../solana/escrow-client.js';
 import { arenaEvents } from '../adrena/integration.js';
@@ -282,7 +282,7 @@ export async function settleDuel(duelId: string) {
 
   const txResult = await db.transaction().execute(async (trx) => {
     // Advisory lock based on duel ID hash
-    const lockKey = hashToInt(duelId);
+    const lockKey = hashToInt('duel', duelId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
 
     const duel = await trx
@@ -602,15 +602,16 @@ export async function settleDuel(duelId: string) {
   if (winnerPubkey) {
     if (loserPubkey) {
       try {
-        const redis = new Redis(env.REDIS_URL);
+        const redis = getSharedRedis();
         const revengeKey = `arena:revenge:${loserPubkey}:${winnerPubkey}`;
         await redis.set(revengeKey, JSON.stringify({
           originalDuelId: duelId,
           assetSymbol: duelData.asset_symbol,
           durationHours: duelData.duration_hours,
           isHonorDuel: duelData.is_honor_duel,
+          stakeAmount: Number(duelData.stake_amount),
+          stakeToken: duelData.stake_token,
         }), 'EX', 1800);
-        await redis.quit();
       } catch (err) {
         console.error('[Duel] Failed to create revenge window:', (err as Error).message);
       }
@@ -724,73 +725,65 @@ export async function getDuelDetails(duelId: string) {
  * Create a revenge duel. Requires an active revenge window in Redis.
  */
 export async function createRevengeDuel(challengerPubkey: string, opponentPubkey: string) {
-  const redis = new Redis(env.REDIS_URL);
+  const redis = getSharedRedis();
 
-  try {
-    const revengeKey = `arena:revenge:${challengerPubkey}:${opponentPubkey}`;
-    const raw = await redis.get(revengeKey);
+  const revengeKey = `arena:revenge:${challengerPubkey}:${opponentPubkey}`;
+  const raw = await redis.get(revengeKey);
 
-    if (!raw) {
-      throw new DuelError('NO_REVENGE_WINDOW', 'No active revenge window against this opponent');
-    }
-
-    const config = JSON.parse(raw) as {
-      originalDuelId: string;
-      assetSymbol: string;
-      durationHours: 24 | 48;
-      isHonorDuel: boolean;
-    };
-
-    // Create the duel with revenge settings
-    const result = await createDuel({
-      challengerPubkey,
-      defenderPubkey: opponentPubkey,
-      assetSymbol: config.assetSymbol,
-      durationHours: config.durationHours,
-      isHonorDuel: config.isHonorDuel,
-      isRevenge: true,
-      originalDuelId: config.originalDuelId,
-    });
-
-    // Delete the revenge key
-    await redis.del(revengeKey);
-
-    return result;
-  } finally {
-    await redis.quit();
+  if (!raw) {
+    throw new DuelError('NO_REVENGE_WINDOW', 'No active revenge window against this opponent');
   }
+
+  const config = JSON.parse(raw) as {
+    originalDuelId: string;
+    assetSymbol: string;
+    durationHours: 24 | 48;
+    isHonorDuel: boolean;
+    stakeAmount?: number;
+    stakeToken?: string;
+  };
+
+  // Create the duel with revenge settings
+  const result = await createDuel({
+    challengerPubkey,
+    defenderPubkey: opponentPubkey,
+    assetSymbol: config.assetSymbol,
+    durationHours: config.durationHours,
+    isHonorDuel: config.isHonorDuel,
+    stakeAmount: config.stakeAmount,
+    stakeToken: config.stakeToken,
+    isRevenge: true,
+    originalDuelId: config.originalDuelId,
+  });
+
+  // Delete the revenge key
+  await redis.del(revengeKey);
+
+  return result;
 }
 
 /**
  * Check active revenge windows for a wallet.
  */
 export async function getRevengeWindows(wallet: string) {
-  const redis = new Redis(env.REDIS_URL);
-
-  try {
-    const pattern = `arena:revenge:${wallet}:*`;
-    const keys = await redis.keys(pattern);
-    const windows = [];
-
+  const redis = getSharedRedis();
+  const pattern = `arena:revenge:${wallet}:*`;
+  const windows = [];
+  let cursor = '0';
+  do {
+    const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+    cursor = nextCursor;
     for (const key of keys) {
       const raw = await redis.get(key);
       const ttl = await redis.ttl(key);
       if (raw && ttl > 0) {
         const opponentPubkey = key.split(':').pop()!;
         const config = JSON.parse(raw);
-        windows.push({
-          opponentPubkey,
-          originalDuelId: config.originalDuelId,
-          assetSymbol: config.assetSymbol,
-          ttlSeconds: ttl,
-        });
+        windows.push({ opponentPubkey, originalDuelId: config.originalDuelId, assetSymbol: config.assetSymbol, ttlSeconds: ttl });
       }
     }
-
-    return windows;
-  } finally {
-    await redis.quit();
-  }
+  } while (cursor !== '0');
+  return windows;
 }
 
 // ── Helpers ──
@@ -870,6 +863,13 @@ function isPositionEligibleForDuel(
   return isClosedInsideWindow || isOpenAtExpiry;
 }
 
+/**
+ * Convert an AdrenaPosition to a DuelPositionSnapshot.
+ * Duel scoring includes mark-to-market positions: open positions at settlement time
+ * are valued using their live PnL rather than requiring a closed exit. This differs
+ * from Gauntlet scoring (filterEligibleTrades in scoring.ts) which only counts
+ * fully closed positions within the competition window.
+ */
 function toDuelPositionSnapshot(position: AdrenaPosition, settleAt: Date): DuelPositionSnapshot {
   const collateralUsd = Number(position.entry_collateral_amount ?? position.collateral_amount ?? 0);
   const feesUsd = Number(position.fees ?? 0);
@@ -892,12 +892,3 @@ function toDuelPositionSnapshot(position: AdrenaPosition, settleAt: Date): DuelP
   };
 }
 
-function hashToInt(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32-bit integer
-  }
-  return Math.abs(hash);
-}

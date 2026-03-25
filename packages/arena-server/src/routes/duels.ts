@@ -1,21 +1,30 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { createDuel, acceptDuel, getDuelDetails, DuelError, createRevengeDuel, getRevengeWindows } from '../engine/duel.js';
+import { createDuel, acceptDuel, getDuelDetails, DuelError, createRevengeDuel, getRevengeWindows, confirmChallengerEscrowDeposit } from '../engine/duel.js';
 import { requireAuth, generateNonce } from '../middleware/auth.js';
 import { revengeLimiter, sseLimiter } from '../middleware/rate-limit.js';
 import { getDb } from '../db/connection.js';
 import { arenaEvents } from '../adrena/integration.js';
+import { getEscrowClient } from '../solana/escrow-client.js';
 
 export const duelRouter = Router();
 
 // Create a duel challenge
 const CreateDuelSchema = z.object({
   defenderPubkey: z.string().min(32).max(44).optional(),
-  assetSymbol: z.enum(['SOL', 'BTC', 'ETH', 'BONK', 'JTO', 'JITOSOL']),
+  assetSymbol: z.enum(['SOL', 'BTC', 'ETH', 'BONK', 'JTO', 'JITOSOL', 'ANY']),
   durationHours: z.union([z.literal(24), z.literal(48)]),
   stakeAmount: z.number().min(0).optional().default(0),
   stakeToken: z.enum(['ADX', 'USDC']).optional().default('ADX'),
   isHonorDuel: z.boolean().optional().default(false),
+});
+
+const AcceptDuelSchema = z.object({
+  txSignature: z.string().min(32).max(128).optional(),
+});
+
+const ConfirmEscrowSchema = z.object({
+  txSignature: z.string().min(32).max(128),
 });
 
 duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
@@ -32,6 +41,22 @@ duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
       stakeToken: input.stakeToken,
       isHonorDuel: input.isHonorDuel,
     });
+
+    let escrowAction = null;
+    if (!input.isHonorDuel && Number(input.stakeAmount ?? 0) > 0) {
+      try {
+        escrowAction = await getEscrowClient().buildChallengerDepositIntent(
+          result.duel.id,
+          wallet,
+          input.stakeToken,
+          Number(input.stakeAmount ?? 0),
+          new Date(result.duel.expires_at),
+          input.defenderPubkey ?? null,
+        );
+      } catch (intentErr) {
+        console.error('[Duels] Failed to build challenger escrow intent:', intentErr);
+      }
+    }
 
     arenaEvents.emit('duel_created', {
       type: 'duel_created',
@@ -56,6 +81,7 @@ duelRouter.post('/', requireAuth, async (req: Request, res: Response) => {
         competition: result.competition,
         challengeUrl: `/arena/challenge/${result.duel.id}`,
         cardUrl: `/api/arena/challenge/${result.duel.id}/card.png`,
+        escrowAction,
       },
     });
   } catch (err) {
@@ -77,8 +103,9 @@ duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) 
   try {
     const wallet = (req as any).wallet as string;
     const duelId = req.params.id as string;
+    const { txSignature } = AcceptDuelSchema.parse(req.body ?? {});
 
-    const result = await acceptDuel(duelId, wallet);
+    const result = await acceptDuel(duelId, wallet, txSignature);
 
     arenaEvents.emit('duel_accepted', {
       type: 'duel_accepted',
@@ -108,6 +135,119 @@ duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) 
       return;
     }
     console.error('[Duels] Accept error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
+duelRouter.post('/:id/escrow/challenger-intent', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const wallet = (req as any).wallet as string;
+    const duel = await getDb()
+      .selectFrom('arena_duels')
+      .where('id', '=', req.params.id as string)
+      .selectAll()
+      .executeTakeFirst();
+
+    if (!duel) {
+      res.status(404).json({ success: false, error: 'DUEL_NOT_FOUND' });
+      return;
+    }
+    if (duel.challenger_pubkey !== wallet) {
+      res.status(403).json({ success: false, error: 'FORBIDDEN' });
+      return;
+    }
+    if (duel.is_honor_duel || Number(duel.stake_amount) <= 0) {
+      res.status(400).json({ success: false, error: 'ESCROW_NOT_REQUIRED' });
+      return;
+    }
+    if (duel.escrow_state !== 'awaiting_challenger_deposit') {
+      res.status(400).json({ success: false, error: 'ESCROW_STATE_INVALID', message: `Expected escrow state 'awaiting_challenger_deposit', got '${duel.escrow_state}'` });
+      return;
+    }
+
+    const intent = await getEscrowClient().buildChallengerDepositIntent(
+      duel.id,
+      wallet,
+      duel.stake_token as 'ADX' | 'USDC',
+      Number(duel.stake_amount),
+      new Date(duel.expires_at),
+      duel.defender_pubkey,
+    );
+    res.json({ success: true, data: intent });
+  } catch (err) {
+    if (err instanceof DuelError) {
+      res.status(400).json({ success: false, error: err.code, message: err.message });
+      return;
+    }
+    console.error('[Duels] Challenger intent error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
+duelRouter.post('/:id/escrow/challenger-confirm', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const wallet = (req as any).wallet as string;
+    const { txSignature } = ConfirmEscrowSchema.parse(req.body);
+    const duel = await confirmChallengerEscrowDeposit(req.params.id as string, wallet, txSignature);
+    res.json({ success: true, data: duel });
+  } catch (err) {
+    if (err instanceof DuelError) {
+      res.status(400).json({ success: false, error: err.code, message: err.message });
+      return;
+    }
+    if (err instanceof z.ZodError) {
+      res.status(400).json({ success: false, error: 'VALIDATION_ERROR', details: err.errors });
+      return;
+    }
+    console.error('[Duels] Challenger confirm error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
+duelRouter.post('/:id/escrow/defender-intent', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const wallet = (req as any).wallet as string;
+    const duel = await getDb()
+      .selectFrom('arena_duels')
+      .where('id', '=', req.params.id as string)
+      .selectAll()
+      .executeTakeFirst();
+
+    if (!duel) {
+      res.status(404).json({ success: false, error: 'DUEL_NOT_FOUND' });
+      return;
+    }
+    if (duel.defender_pubkey && duel.defender_pubkey !== wallet) {
+      res.status(403).json({ success: false, error: 'FORBIDDEN' });
+      return;
+    }
+    if (duel.challenger_pubkey === wallet) {
+      res.status(400).json({ success: false, error: 'CANNOT_SELF_DUEL' });
+      return;
+    }
+    if (duel.is_honor_duel || Number(duel.stake_amount) <= 0) {
+      res.status(400).json({ success: false, error: 'ESCROW_NOT_REQUIRED' });
+      return;
+    }
+    if (duel.escrow_state !== 'awaiting_defender_deposit') {
+      res.status(400).json({ success: false, error: 'ESCROW_STATE_INVALID', message: `Expected escrow state 'awaiting_defender_deposit', got '${duel.escrow_state}'` });
+      return;
+    }
+
+    const intent = await getEscrowClient().buildDefenderDepositIntent(
+      duel.id,
+      wallet,
+      duel.stake_token as 'ADX' | 'USDC',
+      Number(duel.stake_amount),
+      new Date(duel.expires_at),
+    );
+    res.json({ success: true, data: intent });
+  } catch (err) {
+    if (err instanceof DuelError) {
+      res.status(400).json({ success: false, error: err.code, message: err.message });
+      return;
+    }
+    console.error('[Duels] Defender intent error:', err);
     res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
   }
 });
@@ -332,6 +472,16 @@ duelRouter.post('/:id/predict', requireAuth, async (req: Request, res: Response)
       }))
       .returningAll()
       .executeTakeFirstOrThrow();
+
+    arenaEvents.emit('prediction_made', {
+      type: 'prediction_made',
+      timestamp: new Date(),
+      payload: {
+        duelId,
+        predictorPubkey: wallet,
+        predictedWinner,
+      },
+    });
 
     res.json({ success: true, data: prediction });
   } catch (err) {

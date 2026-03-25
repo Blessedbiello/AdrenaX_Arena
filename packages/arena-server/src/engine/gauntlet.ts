@@ -11,6 +11,8 @@ import {
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
 import type { GauntletConfig } from '../db/types.js';
 import { env } from '../config.js';
+import { arenaEvents } from '../adrena/integration.js';
+import { hashToInt } from './utils.js';
 
 export class GauntletError extends Error {
   constructor(public code: string, message?: string) {
@@ -37,17 +39,16 @@ export async function createGauntlet(input: CreateGauntletInput) {
   const db = getDb();
   const {
     name,
-    maxParticipants = 16,
+    maxParticipants = 128,
     durationHours = 24,
-    rounds = 3,
-    roundDurations = [48, 24, 12],
+    rounds = 5,
+    roundDurations = [48, 36, 24, 12, 6],
     intermissionMinutes = 30,
     seasonId,
   } = input;
 
   const now = new Date();
-  // Registration period: 2 hours before start
-  const registrationEnd = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+  const registrationEnd = new Date(now.getTime() + 72 * 60 * 60 * 1000);
 
   // Total duration: sum of all round durations + intermissions between rounds
   const totalRoundMs = roundDurations.reduce((sum, h) => sum + h * 60 * 60 * 1000, 0);
@@ -71,6 +72,10 @@ export async function createGauntlet(input: CreateGauntletInput) {
         rounds,
         roundDurations,
         intermissionMinutes,
+        registrationEnd,
+        currentRoundStart: registrationEnd,
+        currentRoundEnd: firstRoundEnd(registrationEnd, roundDurations),
+        registrationExtended: false,
       }),
     })
     .returningAll()
@@ -85,6 +90,19 @@ export async function createGauntlet(input: CreateGauntletInput) {
   const firstRoundDurationMs = roundDurations[0] * 60 * 60 * 1000;
   const firstRoundEndTime = new Date(registrationEnd.getTime() + firstRoundDurationMs);
   await scheduleGauntletRoundSettlement(redisUrl, competition.id, firstRoundEndTime);
+
+  arenaEvents.emit('gauntlet_created', {
+    type: 'gauntlet_created',
+    timestamp: new Date(),
+    payload: {
+      competitionId: competition.id,
+      name,
+      maxParticipants,
+      durationHours,
+      registrationEnd,
+      endTime,
+    },
+  });
 
   return competition;
 }
@@ -113,7 +131,7 @@ export async function registerForGauntlet(
     }
 
     const config = (typeof competition.config === 'string' ? JSON.parse(competition.config) : competition.config) as GauntletConfig;
-    const maxParticipants = config.maxParticipants ?? 16;
+    const maxParticipants = config.maxParticipants ?? 128;
 
     // Check current count
     const { count } = await trx
@@ -142,6 +160,16 @@ export async function registerForGauntlet(
       throw new GauntletError('ALREADY_REGISTERED', 'Already registered for this Gauntlet');
     }
 
+    arenaEvents.emit('participant_registered', {
+      type: 'participant_registered',
+      timestamp: new Date(),
+      payload: {
+        competitionId,
+        userPubkey,
+        competitionMode: 'gauntlet',
+      },
+    });
+
     return participant;
   });
 }
@@ -154,7 +182,7 @@ export async function activateGauntlet(competitionId: string) {
   const db = getDb();
 
   return db.transaction().execute(async (trx) => {
-    const lockKey = hashToInt(competitionId);
+    const lockKey = hashToInt('gauntlet', competitionId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
 
     const competition = await trx
@@ -169,27 +197,69 @@ export async function activateGauntlet(competitionId: string) {
       throw new GauntletError('NOT_ACTIVATABLE', 'Gauntlet not found or not in registration');
     }
 
-    // Need at least 2 participants
+    const config = (typeof competition.config === 'string' ? JSON.parse(competition.config as string) : competition.config) as GauntletConfig & {
+      registrationExtended?: boolean;
+      currentRoundStart?: string;
+      currentRoundEnd?: string;
+    };
+
+    // Need at least 64 participants for a public gauntlet. Delay once by 24h before cancellation.
     const { count } = await trx
       .selectFrom('arena_participants')
       .where('competition_id', '=', competitionId)
       .select(sql<number>`COUNT(*)`.as('count'))
       .executeTakeFirstOrThrow();
 
-    if (Number(count) < 2) {
-      // Cancel — not enough participants
+    if (Number(count) < 64) {
+      if (!config.registrationExtended) {
+        const delayedStart = new Date(new Date(competition.start_time).getTime() + 24 * 60 * 60 * 1000);
+        const delayedEnd = new Date(new Date(competition.end_time).getTime() + 24 * 60 * 60 * 1000);
+        const nextConfig = {
+          ...config,
+          registrationExtended: true,
+          registrationEnd: delayedStart,
+          currentRoundStart: delayedStart,
+          currentRoundEnd: firstRoundEnd(delayedStart, config.roundDurations ?? [48, 36, 24, 12, 6]),
+        };
+
+        await trx
+          .updateTable('arena_competitions')
+          .set({
+            start_time: delayedStart,
+            end_time: delayedEnd,
+            config: JSON.stringify(nextConfig),
+            updated_at: new Date(),
+          })
+          .where('id', '=', competitionId)
+          .execute();
+
+        const redisUrl = env.REDIS_URL;
+        await scheduleGauntletActivation(redisUrl, competitionId, delayedStart);
+        await scheduleGauntletRoundSettlement(redisUrl, competitionId, firstRoundEnd(delayedStart, config.roundDurations ?? [48, 36, 24, 12, 6]));
+        throw new GauntletError('REGISTRATION_EXTENDED', 'Registration extended by 24 hours due to low participation');
+      }
+
       await trx
         .updateTable('arena_competitions')
         .set({ status: 'cancelled', updated_at: new Date() })
         .where('id', '=', competitionId)
         .execute();
-      throw new GauntletError('NOT_ENOUGH_PARTICIPANTS', 'Need at least 2 participants');
+      throw new GauntletError('NOT_ENOUGH_PARTICIPANTS', 'Need at least 64 participants');
     }
 
     // Activate and set current_round to 1 (was 0 during registration)
     await trx
       .updateTable('arena_competitions')
-      .set({ status: 'active', current_round: 1, updated_at: new Date() })
+      .set({
+        status: 'active',
+        current_round: 1,
+        config: JSON.stringify({
+          ...config,
+          currentRoundStart: competition.start_time,
+          currentRoundEnd: firstRoundEnd(new Date(competition.start_time), config.roundDurations ?? [48, 36, 24, 12, 6]),
+        }),
+        updated_at: new Date(),
+      })
       .where('id', '=', competitionId)
       .execute();
 
@@ -206,6 +276,16 @@ export async function activateGauntlet(competitionId: string) {
       await startIndexingParticipant(redisUrl, competitionId, p.user_pubkey);
     }
 
+    arenaEvents.emit('gauntlet_activated', {
+      type: 'gauntlet_activated',
+      timestamp: new Date(),
+      payload: {
+        competitionId,
+        participantCount: Number(count),
+        participantPubkeys: participants.map((p) => p.user_pubkey),
+      },
+    });
+
     return { participantCount: Number(count) };
   });
 }
@@ -221,7 +301,7 @@ export async function settleGauntletRound(competitionId: string) {
   const db = getDb();
 
   return db.transaction().execute(async (trx) => {
-    const lockKey = hashToInt(competitionId);
+    const lockKey = hashToInt('gauntlet', competitionId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
 
     const competition = await trx
@@ -371,6 +451,21 @@ export async function settleGauntletRound(competitionId: string) {
 
       await scheduleRewardProcessing(redisUrl, competitionId);
 
+      arenaEvents.emit('gauntlet_settled', {
+        type: 'gauntlet_settled',
+        timestamp: new Date(),
+        payload: {
+          competitionId,
+          rankings: surviving.slice(0, 3).map((participant, index) => ({
+            rank: index + 1,
+            pubkey: participant.user_pubkey,
+            roi: Number(participant.roi_percent),
+            pnl: Number(participant.pnl_usd),
+            trades: participant.positions_closed,
+          })),
+        },
+      });
+
       return {
         round: currentRound,
         final: true,
@@ -382,12 +477,19 @@ export async function settleGauntletRound(competitionId: string) {
       const nextRound = currentRound + 1;
       const intermissionMs = (config.intermissionMinutes ?? 30) * 60 * 1000;
       const nextRoundDurationMs = (config.roundDurations?.[nextRound - 1] ?? 24) * 60 * 60 * 1000;
+      const activationTime = new Date(Date.now() + intermissionMs);
+      const nextRoundEnd = new Date(activationTime.getTime() + nextRoundDurationMs);
 
       await trx
         .updateTable('arena_competitions')
         .set({
           status: 'round_transition',
           current_round: nextRound,
+          config: JSON.stringify({
+            ...config,
+            currentRoundStart: activationTime,
+            currentRoundEnd: nextRoundEnd,
+          }),
           updated_at: new Date(),
         })
         .where('id', '=', competitionId)
@@ -399,11 +501,9 @@ export async function settleGauntletRound(competitionId: string) {
       }
 
       // Schedule next round activation after intermission
-      const activationTime = new Date(Date.now() + intermissionMs);
       await scheduleGauntletRoundActivation(redisUrl, competitionId, activationTime);
 
       // Schedule next round settlement after activation + round duration
-      const nextRoundEnd = new Date(activationTime.getTime() + nextRoundDurationMs);
       await scheduleGauntletRoundSettlement(redisUrl, competitionId, nextRoundEnd);
 
       return {
@@ -428,7 +528,7 @@ export async function activateGauntletRound(competitionId: string) {
   const db = getDb();
 
   return db.transaction().execute(async (trx) => {
-    const lockKey = hashToInt(competitionId);
+    const lockKey = hashToInt('gauntlet', competitionId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
 
     const competition = await trx
@@ -452,11 +552,19 @@ export async function activateGauntletRound(competitionId: string) {
       .where('id', '=', competitionId)
       .execute();
 
-    // Reset positions_closed to 0 for all remaining active participants
-    // so round-scoped elimination logic counts only this round's trades
+    // Reset all scoring fields for active participants so round-scoped
+    // elimination logic counts only this round's trades and scores
     await trx
       .updateTable('arena_participants')
-      .set({ positions_closed: 0, updated_at: new Date() })
+      .set({
+        positions_closed: 0,
+        arena_score: 0,
+        roi_percent: 0,
+        pnl_usd: 0,
+        total_volume_usd: 0,
+        win_rate: 0,
+        updated_at: new Date(),
+      })
       .where('competition_id', '=', competitionId)
       .where('status', '=', 'active')
       .execute();
@@ -489,7 +597,7 @@ export async function settleGauntlet(competitionId: string) {
   const db = getDb();
 
   return db.transaction().execute(async (trx) => {
-    const lockKey = hashToInt(competitionId);
+    const lockKey = hashToInt('gauntlet', competitionId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
 
     const competition = await trx
@@ -627,12 +735,8 @@ export async function getGauntletLeaderboard(competitionId: string) {
   }));
 }
 
-function hashToInt(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash);
+function firstRoundEnd(start: Date, roundDurations: number[]): Date {
+  const firstRoundHours = roundDurations[0] ?? 48;
+  return new Date(start.getTime() + firstRoundHours * 60 * 60 * 1000);
 }
+
