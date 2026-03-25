@@ -156,6 +156,29 @@ export interface ArenaSeasonPointsTable {
   clan_points: number;
 }
 
+// ── Arena Clans ──
+export interface ArenaClansTable {
+  id: Generated<string>;
+  name: string;
+  tag: string;
+  leader_pubkey: string;
+  member_count: ColumnType<number, number | undefined, number>;
+  total_war_score: ColumnType<number, number | string | undefined, number | string>;
+  wars_won: ColumnType<number, number | undefined, number>;
+  wars_played: ColumnType<number, number | undefined, number>;
+  created_at: Generated<Date>;
+}
+
+// ── Arena Clan Members ──
+export interface ArenaClanMembersTable {
+  id: Generated<string>;
+  clan_id: string;
+  user_pubkey: string;
+  role: 'leader' | 'officer' | 'member';
+  joined_at: Generated<Date>;
+  cooldown_until: ColumnType<Date | null, string | Date | null | undefined, string | Date | null>;
+}
+
 // ── Arena User Stats ──
 export interface ArenaUserStatsTable {
   user_pubkey: string;
@@ -181,6 +204,8 @@ export interface DB {
   arena_rewards: ArenaRewardsTable;
   arena_season_points: ArenaSeasonPointsTable;
   arena_user_stats: ArenaUserStatsTable;
+  arena_clans: ArenaClansTable;
+  arena_clan_members: ArenaClanMembersTable;
 }
 
 // Export helper types
@@ -197,3 +222,5 @@ export type NewDuel = Insertable<ArenaDuelsTable>;
 export type Prediction = Selectable<ArenaPredictionsTable>;
 export type Reward = Selectable<ArenaRewardsTable>;
 export type UserStats = Selectable<ArenaUserStatsTable>;
+export type Clan = Selectable<ArenaClansTable>;
+export type ClanMember = Selectable<ArenaClanMembersTable>;

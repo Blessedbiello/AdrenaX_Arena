@@ -200,6 +200,40 @@ const migrations: Record<string, Migration> = {
       await db.schema.dropTable('arena_user_stats').ifExists().execute();
     },
   },
+
+  '003_clans': {
+    async up(db: Kysely<unknown>) {
+      await db.schema
+        .createTable('arena_clans')
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('name', 'varchar(32)', col => col.notNull().unique())
+        .addColumn('tag', 'varchar(5)', col => col.notNull().unique())
+        .addColumn('leader_pubkey', 'varchar(44)', col => col.notNull())
+        .addColumn('member_count', 'integer', col => col.notNull().defaultTo(1))
+        .addColumn('total_war_score', sql`numeric(12,4)`, col => col.notNull().defaultTo(0))
+        .addColumn('wars_won', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('wars_played', 'integer', col => col.notNull().defaultTo(0))
+        .addColumn('created_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .execute();
+
+      await db.schema
+        .createTable('arena_clan_members')
+        .addColumn('id', 'uuid', col => col.primaryKey().defaultTo(sql`gen_random_uuid()`))
+        .addColumn('clan_id', 'uuid', col => col.notNull().references('arena_clans.id'))
+        .addColumn('user_pubkey', 'varchar(44)', col => col.notNull().unique())
+        .addColumn('role', 'varchar(10)', col => col.notNull().defaultTo('member'))
+        .addColumn('joined_at', 'timestamptz', col => col.defaultTo(sql`NOW()`))
+        .addColumn('cooldown_until', 'timestamptz')
+        .execute();
+
+      await db.schema.createIndex('idx_clan_members_clan').on('arena_clan_members').column('clan_id').execute();
+      await db.schema.createIndex('idx_clan_members_user').on('arena_clan_members').column('user_pubkey').execute();
+    },
+    async down(db: Kysely<unknown>) {
+      await db.schema.dropTable('arena_clan_members').ifExists().execute();
+      await db.schema.dropTable('arena_clans').ifExists().execute();
+    },
+  },
 };
 
 class InlineMigrationProvider implements MigrationProvider {
