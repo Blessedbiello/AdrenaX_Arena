@@ -199,7 +199,7 @@ export async function acceptDuel(duelId: string, defenderWallet: string) {
 export async function settleDuel(duelId: string) {
   const db = getDb();
 
-  return db.transaction().execute(async (trx) => {
+  const txResult = await db.transaction().execute(async (trx) => {
     // Advisory lock based on duel ID hash
     const lockKey = hashToInt(duelId);
     await sql`SELECT pg_advisory_xact_lock(${lockKey})`.execute(trx);
@@ -439,28 +439,6 @@ export async function settleDuel(duelId: string) {
     // Schedule reward processing
     await scheduleRewardProcessing(redisUrl, duel.competition_id);
 
-    // Create revenge window for the loser (30-min TTL)
-    if (result.winner) {
-      const loserPubkey = result.winner === duel.challenger_pubkey
-        ? duel.defender_pubkey
-        : duel.challenger_pubkey;
-      if (loserPubkey) {
-        try {
-          const redis = new Redis(env.REDIS_URL);
-          const revengeKey = `arena:revenge:${loserPubkey}:${result.winner}`;
-          await redis.set(revengeKey, JSON.stringify({
-            originalDuelId: duelId,
-            assetSymbol: duel.asset_symbol,
-            durationHours: duel.duration_hours,
-            isHonorDuel: duel.is_honor_duel,
-          }), 'EX', 1800); // 30 minutes
-          await redis.quit();
-        } catch (err) {
-          console.error('[Duel] Failed to create revenge window:', (err as Error).message);
-        }
-      }
-    }
-
     // Settle predictions
     if (result.winner) {
       await trx
@@ -480,6 +458,32 @@ export async function settleDuel(duelId: string) {
 
     return { duel: { ...duel, ...result }, result };
   });
+
+  // Create revenge window AFTER transaction commits (avoid two-phase commit risk)
+  if (txResult.result.winner) {
+    const duelData = txResult.duel;
+    const winnerPubkey = txResult.result.winner;
+    const loserPubkey = winnerPubkey === duelData.challenger_pubkey
+      ? duelData.defender_pubkey
+      : duelData.challenger_pubkey;
+    if (loserPubkey) {
+      try {
+        const redis = new Redis(env.REDIS_URL);
+        const revengeKey = `arena:revenge:${loserPubkey}:${winnerPubkey}`;
+        await redis.set(revengeKey, JSON.stringify({
+          originalDuelId: duelId,
+          assetSymbol: duelData.asset_symbol,
+          durationHours: duelData.duration_hours,
+          isHonorDuel: duelData.is_honor_duel,
+        }), 'EX', 1800);
+        await redis.quit();
+      } catch (err) {
+        console.error('[Duel] Failed to create revenge window:', (err as Error).message);
+      }
+    }
+  }
+
+  return txResult;
 }
 
 /**

@@ -170,7 +170,7 @@ describe('mutagen reward with revenge', () => {
     const base = 50;
     const streakMult = 1.15;
     const revengeMult = 1;
-    // 50 * 1.15 = 57.5 (floating point: 57.4999...) → rounds to 57
+    // 50 * 1.15 = 57.4999... (IEEE 754) → Math.round → 57
     expect(Math.round(base * streakMult * revengeMult)).toBe(57);
   });
 

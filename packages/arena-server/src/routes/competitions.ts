@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { requireAuth } from '../middleware/auth.js';
+import { sseLimiter } from '../middleware/rate-limit.js';
 import { getDb } from '../db/connection.js';
 import {
   createGauntlet,
@@ -102,7 +103,7 @@ competitionRouter.get('/:id', async (req: Request, res: Response) => {
 });
 
 // SSE leaderboard stream
-competitionRouter.get('/:id/stream', async (req: Request, res: Response) => {
+competitionRouter.get('/:id/stream', sseLimiter, async (req: Request, res: Response) => {
   const competitionId = req.params.id as string;
 
   res.writeHead(200, {
@@ -141,7 +142,12 @@ const CreateGauntletSchema = z.object({
   rounds: z.number().min(1).max(5).optional().default(3),
   roundDurations: z.array(z.number().min(1).max(168)).optional(),
   intermissionMinutes: z.number().min(10).max(120).optional().default(30),
-});
+}).refine(data => {
+  if (data.roundDurations && data.roundDurations.length !== data.rounds) {
+    return false;
+  }
+  return true;
+}, { message: 'roundDurations length must match rounds count' });
 
 competitionRouter.post('/gauntlet', requireAuth, async (req: Request, res: Response) => {
   try {

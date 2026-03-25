@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { createDuel, acceptDuel, getDuelDetails, DuelError, createRevengeDuel, getRevengeWindows } from '../engine/duel.js';
 import { requireAuth, generateNonce } from '../middleware/auth.js';
-import { revengeLimiter } from '../middleware/rate-limit.js';
+import { revengeLimiter, sseLimiter } from '../middleware/rate-limit.js';
 import { getDb } from '../db/connection.js';
 import { arenaEvents } from '../adrena/integration.js';
 
@@ -112,6 +112,17 @@ duelRouter.post('/:id/accept', requireAuth, async (req: Request, res: Response) 
   }
 });
 
+// Get active revenge windows for a wallet (must be before /:id to avoid shadowing)
+duelRouter.get('/revenge/:wallet', async (req: Request, res: Response) => {
+  try {
+    const windows = await getRevengeWindows(req.params.wallet as string);
+    res.json({ success: true, data: windows });
+  } catch (err) {
+    console.error('[Duels] Revenge windows error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Get duel details
 duelRouter.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -182,7 +193,7 @@ duelRouter.get('/', async (req: Request, res: Response) => {
 });
 
 // SSE stream for duel updates
-duelRouter.get('/:id/stream', async (req: Request, res: Response) => {
+duelRouter.get('/:id/stream', sseLimiter, async (req: Request, res: Response) => {
   const duelId = req.params.id as string;
 
   res.writeHead(200, {
@@ -252,17 +263,6 @@ duelRouter.post('/revenge', revengeLimiter, requireAuth, async (req: Request, re
       return;
     }
     console.error('[Duels] Revenge error:', err);
-    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
-  }
-});
-
-// Get active revenge windows for a wallet
-duelRouter.get('/revenge/:wallet', async (req: Request, res: Response) => {
-  try {
-    const windows = await getRevengeWindows(req.params.wallet as string);
-    res.json({ success: true, data: windows });
-  } catch (err) {
-    console.error('[Duels] Revenge windows error:', err);
     res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
   }
 });
