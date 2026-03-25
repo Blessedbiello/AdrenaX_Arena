@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import { getDb } from '../db/connection.js';
+import type { Webhook } from '../db/types.js';
 
 /**
  * AdrenaX Arena Integration Layer
@@ -227,66 +229,256 @@ export interface WebhookSubscription {
   createdAt: Date;
 }
 
-const webhookSubscriptions: WebhookSubscription[] = [];
+/** Map a DB row to the domain WebhookSubscription type. */
+function rowToSubscription(row: Webhook): WebhookSubscription {
+  return {
+    id: row.id,
+    url: row.url,
+    events: row.events as Array<keyof ArenaEventMap>,
+    secret: row.secret,
+    active: row.active,
+    createdAt: row.created_at,
+  };
+}
 
 /**
  * Register a webhook endpoint to receive Arena events.
- * Adrena's backend registers webhooks to receive real-time competition events.
+ * Persists the subscription to the database so it survives restarts.
  */
-export function registerWebhook(subscription: Omit<WebhookSubscription, 'id' | 'createdAt'>): WebhookSubscription {
-  const webhook: WebhookSubscription = {
-    ...subscription,
-    id: `wh_${Date.now().toString(36)}`,
-    createdAt: new Date(),
-  };
-  webhookSubscriptions.push(webhook);
+export async function registerWebhook(
+  subscription: Omit<WebhookSubscription, 'id' | 'createdAt'>,
+): Promise<WebhookSubscription> {
+  const db = getDb();
+  const row = await db
+    .insertInto('arena_webhooks')
+    .values({
+      url: subscription.url,
+      events: subscription.events as string[],
+      secret: subscription.secret,
+      active: subscription.active,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
 
-  // Subscribe to all requested events
-  for (const eventName of subscription.events) {
-    arenaEvents.on(eventName, async (event) => {
-      if (!webhook.active) return;
-      await deliverWebhook(webhook, event);
-    });
-  }
-
-  return webhook;
+  return rowToSubscription(row);
 }
 
-export function removeWebhook(id: string): boolean {
-  const idx = webhookSubscriptions.findIndex(w => w.id === id);
-  if (idx === -1) return false;
-  webhookSubscriptions[idx].active = false;
-  webhookSubscriptions.splice(idx, 1);
-  return true;
+/**
+ * Soft-delete a webhook by setting active = false.
+ * Returns false when no matching row is found.
+ */
+export async function removeWebhook(id: string): Promise<boolean> {
+  const db = getDb();
+  const result = await db
+    .updateTable('arena_webhooks')
+    .set({ active: false })
+    .where('id', '=', id)
+    .executeTakeFirst();
+
+  return (result.numUpdatedRows ?? BigInt(0)) > BigInt(0);
 }
 
-export function listWebhooks(): WebhookSubscription[] {
-  return [...webhookSubscriptions];
+/** Return all webhook subscriptions from the database. */
+export async function listWebhooks(): Promise<WebhookSubscription[]> {
+  const db = getDb();
+  const rows = await db
+    .selectFrom('arena_webhooks')
+    .selectAll()
+    .execute();
+
+  return rows.map(rowToSubscription);
 }
 
-async function deliverWebhook(webhook: WebhookSubscription, event: ArenaEvent): Promise<void> {
+/**
+ * Retry intervals (seconds) indexed by attempt number (0-based).
+ * After attempt 4 (5th total) the delivery is marked dead.
+ */
+const RETRY_DELAYS_SECONDS = [60, 300, 1800, 3600, 7200] as const;
+const MAX_ATTEMPTS = 5;
+
+/**
+ * Deliver an event to a single webhook subscriber.
+ *
+ * Inserts a delivery row with status='pending', attempts the HTTP POST,
+ * then updates the row to 'sent' on success or advances retry scheduling
+ * on failure. After MAX_ATTEMPTS the delivery is marked 'dead'.
+ */
+async function deliverWebhook(webhook: Webhook, event: ArenaEvent): Promise<void> {
+  const db = getDb();
+  const body = JSON.stringify(event);
+
+  // Insert a delivery record before attempting so we have a row to update.
+  const delivery = await db
+    .insertInto('arena_webhook_deliveries')
+    .values({
+      webhook_id: webhook.id,
+      event_type: event.type,
+      payload: event as unknown as Record<string, unknown>,
+      status: 'pending',
+      attempts: 0,
+      last_attempt_at: null,
+      next_retry_at: null,
+      response_status: null,
+    })
+    .returningAll()
+    .executeTakeFirstOrThrow();
+
+  await attemptDelivery(delivery.id, webhook, body, event.type);
+}
+
+/**
+ * Execute a single HTTP delivery attempt for an existing delivery row.
+ * Shared by the initial delivery path and the retry processor.
+ */
+async function attemptDelivery(
+  deliveryId: number,
+  webhook: Webhook,
+  body: string,
+  eventType: string,
+): Promise<void> {
+  const db = getDb();
+  const { createHmac } = await import('crypto');
+  const signature = createHmac('sha256', webhook.secret).update(body).digest('hex');
+
+  // Fetch current attempt count so the retry math is always accurate.
+  const current = await db
+    .selectFrom('arena_webhook_deliveries')
+    .select(['attempts'])
+    .where('id', '=', deliveryId)
+    .executeTakeFirstOrThrow();
+
+  const newAttempts = current.attempts + 1;
+  const now = new Date();
+
+  let responseStatus: number | null = null;
+  let success = false;
+
   try {
-    const { createHmac } = await import('crypto');
-    const body = JSON.stringify(event);
-    const signature = createHmac('sha256', webhook.secret).update(body).digest('hex');
-
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
+    const timeoutHandle = setTimeout(() => controller.abort(), 5000);
 
-    await fetch(webhook.url, {
+    const response = await fetch(webhook.url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Arena-Signature': signature,
-        'X-Arena-Event': event.type,
+        'X-Arena-Event': eventType,
       },
       body,
       signal: controller.signal,
     });
 
-    clearTimeout(timeout);
+    clearTimeout(timeoutHandle);
+    responseStatus = response.status;
+    success = response.ok;
   } catch (err) {
-    console.error(`[Webhook] Delivery failed to ${webhook.url}:`, (err as Error).message);
+    console.error(`[Webhook] HTTP error for ${webhook.url}:`, (err as Error).message);
+  }
+
+  if (success) {
+    await db
+      .updateTable('arena_webhook_deliveries')
+      .set({
+        status: 'sent',
+        attempts: newAttempts,
+        last_attempt_at: now,
+        next_retry_at: null,
+        response_status: responseStatus,
+      })
+      .where('id', '=', deliveryId)
+      .execute();
+    return;
+  }
+
+  // Delivery failed — decide whether to schedule a retry or mark dead.
+  const isDead = newAttempts >= MAX_ATTEMPTS;
+  const delaySeconds = RETRY_DELAYS_SECONDS[Math.min(newAttempts, RETRY_DELAYS_SECONDS.length - 1)];
+  const nextRetryAt = isDead
+    ? null
+    : new Date(now.getTime() + delaySeconds * 1000);
+
+  await db
+    .updateTable('arena_webhook_deliveries')
+    .set({
+      status: isDead ? 'dead' : 'failed',
+      attempts: newAttempts,
+      last_attempt_at: now,
+      next_retry_at: nextRetryAt,
+      response_status: responseStatus,
+    })
+    .where('id', '=', deliveryId)
+    .execute();
+
+  console.error(
+    `[Webhook] Delivery ${deliveryId} to ${webhook.url} failed (attempt ${newAttempts}/${MAX_ATTEMPTS}).` +
+    (isDead ? ' Marked dead.' : ` Next retry at ${nextRetryAt?.toISOString()}.`),
+  );
+}
+
+/**
+ * Process pending and failed webhook deliveries whose retry window has elapsed.
+ *
+ * Intended to be called periodically (e.g. every 60 s) by the server's
+ * background task runner.
+ */
+export async function processWebhookRetries(): Promise<void> {
+  const db = getDb();
+  const now = new Date();
+
+  const due = await db
+    .selectFrom('arena_webhook_deliveries as d')
+    .innerJoin('arena_webhooks as w', 'w.id', 'd.webhook_id')
+    .where('d.status', 'in', ['pending', 'failed'])
+    .where('d.next_retry_at', '<=', now)
+    .where('d.attempts', '<', MAX_ATTEMPTS)
+    .where('w.active', '=', true)
+    .select([
+      'd.id as delivery_id',
+      'd.payload',
+      'd.event_type',
+      'd.attempts',
+      'w.id as webhook_id',
+      'w.url',
+      'w.secret',
+      'w.events',
+      'w.active',
+      'w.created_at',
+    ])
+    .execute();
+
+  for (const row of due) {
+    const webhook: Webhook = {
+      id: row.webhook_id,
+      url: row.url,
+      secret: row.secret,
+      events: row.events,
+      active: row.active,
+      created_at: row.created_at,
+    };
+
+    const body = JSON.stringify(row.payload);
+    await attemptDelivery(row.delivery_id, webhook, body, row.event_type).catch(err =>
+      console.error(`[Webhook] Retry failed for delivery ${row.delivery_id}:`, err),
+    );
+  }
+}
+
+/**
+ * Dispatch an Arena event to all active webhook subscribers that have
+ * registered interest in that event type.
+ */
+async function dispatchToWebhooks(event: ArenaEvent): Promise<void> {
+  const db = getDb();
+  const webhooks = await db
+    .selectFrom('arena_webhooks')
+    .where('active', '=', true)
+    .selectAll()
+    .execute();
+
+  for (const webhook of webhooks) {
+    if (webhook.events.includes(event.type)) {
+      await deliverWebhook(webhook, event);
+    }
   }
 }
 
@@ -352,3 +544,24 @@ arenaEvents.on('gauntlet_settled', async (event) => {
     ).catch(err => console.error('[Integration] Leaderboard sync failed:', err));
   }
 });
+
+// ── Webhook Dispatch ──
+// All Arena events are fanned out to active DB-backed webhook subscribers.
+
+for (const eventName of [
+  'duel_created',
+  'duel_accepted',
+  'duel_settled',
+  'gauntlet_created',
+  'gauntlet_activated',
+  'gauntlet_settled',
+  'participant_registered',
+  'reward_distributed',
+  'prediction_made',
+] as const) {
+  arenaEvents.on(eventName, (event) => {
+    dispatchToWebhooks(event).catch(err =>
+      console.error('[Webhook] Dispatch failed:', err),
+    );
+  });
+}
