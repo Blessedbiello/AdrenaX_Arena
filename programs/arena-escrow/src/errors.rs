@@ -28,4 +28,6 @@ pub enum ArenaEscrowError {
     InvalidWinner,
     #[msg("Deposit amount must match challenger amount")]
     AmountMismatch,
+    #[msg("Duel ID must be between 1 and 32 characters")]
+    InvalidDuelId,
 }

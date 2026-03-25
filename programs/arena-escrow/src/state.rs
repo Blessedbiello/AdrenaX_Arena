@@ -15,7 +15,7 @@ pub struct ArenaConfig {
 #[account]
 #[derive(InitSpace)]
 pub struct DuelEscrow {
-    #[max_len(64)]
+    #[max_len(32)]
     pub duel_id: String,
     pub challenger: Pubkey,
     pub defender: Pubkey,     // Pubkey::default() until accepted

@@ -42,12 +42,22 @@ pub mod arena_escrow {
         amount: u64,
         expires_at: i64,
     ) -> Result<()> {
+        // CRITICAL-4: validate duel_id length before any state writes
+        require!(
+            !duel_id.is_empty() && duel_id.len() <= 32,
+            ArenaEscrowError::InvalidDuelId
+        );
+
         let config = &ctx.accounts.config;
         require!(!config.paused, ArenaEscrowError::Paused);
         require!(
             config.allowed_mints.contains(&ctx.accounts.mint.key()),
             ArenaEscrowError::InvalidMint
         );
+
+        // MINOR-2: expires_at must be in the future
+        let now = Clock::get()?.unix_timestamp;
+        require!(expires_at > now, ArenaEscrowError::DuelExpired);
 
         // Transfer challenger's tokens to escrow vault
         token::transfer(
@@ -70,7 +80,7 @@ pub mod arena_escrow {
         escrow.challenger_amount = amount;
         escrow.defender_amount = 0;
         escrow.status = EscrowStatus::Pending;
-        escrow.created_at = Clock::get()?.unix_timestamp;
+        escrow.created_at = now;
         escrow.expires_at = expires_at;
         escrow.winner = Pubkey::default();
         escrow.bump = ctx.bumps.escrow;
@@ -144,7 +154,9 @@ pub mod arena_escrow {
         let now = Clock::get()?.unix_timestamp;
         require!(now >= ctx.accounts.escrow.expires_at, ArenaEscrowError::DuelNotExpired);
 
-        // Extract all values before any borrows that conflict with CPI
+        // Extract all values before any borrows that conflict with CPI.
+        // CRITICAL-5: escrow account will be closed (close = caller) after this handler returns,
+        // so all needed data must be read into locals first.
         let refund = ctx.accounts.escrow.challenger_amount;
         let duel_id_bytes = ctx.accounts.escrow.duel_id.as_bytes().to_vec();
         let bump = ctx.accounts.escrow.bump;
@@ -169,6 +181,7 @@ pub mod arena_escrow {
             refund,
         )?;
 
+        // Mark status before Anchor closes the account
         ctx.accounts.escrow.status = EscrowStatus::Cancelled;
 
         emit!(EscrowCancelled {
@@ -198,8 +211,21 @@ pub mod arena_escrow {
             ArenaEscrowError::InvalidWinner
         );
 
-        // Extract all values before any borrows that conflict with CPI
-        let total = ctx.accounts.escrow.challenger_amount + ctx.accounts.escrow.defender_amount;
+        // CRITICAL-2: winner_token_account.owner cannot be constrained at account-context level
+        // because `winner` is an instruction arg, not an account. Runtime check required.
+        require!(
+            ctx.accounts.winner_token_account.owner == winner,
+            ArenaEscrowError::InvalidWinner
+        );
+
+        // Extract all values before any borrows that conflict with CPI.
+        // CRITICAL-5: escrow will be closed (close = authority) after handler returns.
+        let challenger_amount = ctx.accounts.escrow.challenger_amount;
+        let defender_amount = ctx.accounts.escrow.defender_amount;
+        // MAJOR-5: use checked arithmetic to prevent overflow
+        let total = challenger_amount
+            .checked_add(defender_amount)
+            .ok_or(ArenaEscrowError::AmountMismatch)?;
         let fee = total * (ctx.accounts.config.fee_bps as u64) / 10_000;
         let winner_amount = total - fee;
         let duel_id_bytes = ctx.accounts.escrow.duel_id.as_bytes().to_vec();
@@ -241,6 +267,7 @@ pub mod arena_escrow {
             )?;
         }
 
+        // Mark status and winner before Anchor closes the account
         ctx.accounts.escrow.status = EscrowStatus::Settled;
         ctx.accounts.escrow.winner = winner;
 
@@ -305,6 +332,7 @@ pub mod arena_escrow {
             defender_amount,
         )?;
 
+        // Mark status before Anchor closes the account
         ctx.accounts.escrow.status = EscrowStatus::Refunded;
 
         emit!(EscrowRefunded {
@@ -381,19 +409,24 @@ pub struct CreateDuelEscrow<'info> {
     pub escrow: Account<'info, DuelEscrow>,
     #[account(mut)]
     pub challenger: Signer<'info>,
-    #[account(mut, constraint = challenger_token_account.mint == mint.key())]
+    #[account(
+        mut,
+        constraint = challenger_token_account.mint == mint.key() @ ArenaEscrowError::InvalidMint,
+    )]
     pub challenger_token_account: Account<'info, TokenAccount>,
     /// Escrow vault token account — must be pre-created by the client
     /// as an associated token account owned by the escrow PDA.
+    /// CRITICAL-1: vault must be owned by the escrow PDA and hold the correct mint.
     #[account(
         mut,
-        constraint = escrow_vault.mint == mint.key(),
+        constraint = escrow_vault.owner == escrow.key() @ ArenaEscrowError::Unauthorized,
+        constraint = escrow_vault.mint == mint.key() @ ArenaEscrowError::InvalidMint,
     )]
     pub escrow_vault: Account<'info, TokenAccount>,
     pub mint: Account<'info, Mint>,
     pub token_program: Program<'info, Token>,
+    // MINOR-5: rent sysvar removed; not needed with Anchor's init macro
     pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
@@ -404,56 +437,127 @@ pub struct AcceptDuelEscrow<'info> {
     pub escrow: Account<'info, DuelEscrow>,
     #[account(mut)]
     pub defender: Signer<'info>,
-    #[account(mut, constraint = defender_token_account.mint == escrow.mint)]
+    #[account(
+        mut,
+        constraint = defender_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub defender_token_account: Account<'info, TokenAccount>,
-    #[account(mut, constraint = escrow_vault.mint == escrow.mint)]
+    /// CRITICAL-1: vault must be owned by the escrow PDA and hold the correct mint.
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == escrow.key() @ ArenaEscrowError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub escrow_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
 pub struct CancelExpiredDuel<'info> {
-    #[account(mut, seeds = [b"duel", escrow.duel_id.as_bytes()], bump = escrow.bump)]
+    /// CRITICAL-5: close the escrow account and return rent to caller after the handler returns.
+    #[account(
+        mut,
+        close = caller,
+        seeds = [b"duel", escrow.duel_id.as_bytes()],
+        bump = escrow.bump,
+    )]
     pub escrow: Account<'info, DuelEscrow>,
     /// Anyone can call cancel on an expired duel
+    #[account(mut)]
     pub caller: Signer<'info>,
-    #[account(mut, constraint = challenger_token_account.owner == escrow.challenger)]
+    /// MAJOR-2: constrain both owner and mint on the challenger refund account.
+    #[account(
+        mut,
+        constraint = challenger_token_account.owner == escrow.challenger @ ArenaEscrowError::Unauthorized,
+        constraint = challenger_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub challenger_token_account: Account<'info, TokenAccount>,
-    #[account(mut, constraint = escrow_vault.mint == escrow.mint)]
+    /// CRITICAL-1: vault must be owned by the escrow PDA and hold the correct mint.
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == escrow.key() @ ArenaEscrowError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub escrow_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct SettleDuelWinner<'info> {
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, ArenaConfig>,
-    #[account(mut, seeds = [b"duel", escrow.duel_id.as_bytes()], bump = escrow.bump)]
+    /// CRITICAL-5: close the escrow account and return rent to authority after handler returns.
+    #[account(
+        mut,
+        close = authority,
+        seeds = [b"duel", escrow.duel_id.as_bytes()],
+        bump = escrow.bump,
+    )]
     pub escrow: Account<'info, DuelEscrow>,
+    #[account(mut)]
     pub authority: Signer<'info>,
-    #[account(mut)]
+    /// CRITICAL-2: mint check enforced here; owner check done at runtime (winner is an arg).
+    #[account(
+        mut,
+        constraint = winner_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub winner_token_account: Account<'info, TokenAccount>,
-    #[account(mut)]
+    /// CRITICAL-3: treasury token account must be owned by the config treasury and correct mint.
+    #[account(
+        mut,
+        constraint = treasury_token_account.owner == config.treasury @ ArenaEscrowError::Unauthorized,
+        constraint = treasury_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub treasury_token_account: Account<'info, TokenAccount>,
-    #[account(mut, constraint = escrow_vault.mint == escrow.mint)]
+    /// CRITICAL-1: vault must be owned by the escrow PDA and hold the correct mint.
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == escrow.key() @ ArenaEscrowError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub escrow_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct RefundVoidDuel<'info> {
     #[account(seeds = [b"config"], bump = config.bump)]
     pub config: Account<'info, ArenaConfig>,
-    #[account(mut, seeds = [b"duel", escrow.duel_id.as_bytes()], bump = escrow.bump)]
+    /// CRITICAL-5: close the escrow account and return rent to authority after handler returns.
+    #[account(
+        mut,
+        close = authority,
+        seeds = [b"duel", escrow.duel_id.as_bytes()],
+        bump = escrow.bump,
+    )]
     pub escrow: Account<'info, DuelEscrow>,
+    #[account(mut)]
     pub authority: Signer<'info>,
-    #[account(mut, constraint = challenger_token_account.owner == escrow.challenger)]
+    /// MAJOR-2: constrain both owner and mint on the challenger refund account.
+    #[account(
+        mut,
+        constraint = challenger_token_account.owner == escrow.challenger @ ArenaEscrowError::Unauthorized,
+        constraint = challenger_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub challenger_token_account: Account<'info, TokenAccount>,
-    #[account(mut, constraint = defender_token_account.owner == escrow.defender)]
+    /// MAJOR-2: constrain both owner and mint on the defender refund account.
+    #[account(
+        mut,
+        constraint = defender_token_account.owner == escrow.defender @ ArenaEscrowError::Unauthorized,
+        constraint = defender_token_account.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub defender_token_account: Account<'info, TokenAccount>,
-    #[account(mut, constraint = escrow_vault.mint == escrow.mint)]
+    /// CRITICAL-1: vault must be owned by the escrow PDA and hold the correct mint.
+    #[account(
+        mut,
+        constraint = escrow_vault.owner == escrow.key() @ ArenaEscrowError::Unauthorized,
+        constraint = escrow_vault.mint == escrow.mint @ ArenaEscrowError::InvalidMint,
+    )]
     pub escrow_vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
