@@ -54,7 +54,7 @@ AdrenaX Arena addresses every one of these problems:
 ### Design Principles
 
 1. **Skill over capital.** Scoring is normalized so a trader with $100 competes fairly against a trader with $10,000.
-2. **No on-chain program changes.** Arena reads Adrena's existing trade data via the public API at `datapi.adrena.trade`. All competition logic runs off-chain.
+2. **Minimal on-chain footprint.** Arena reads Adrena's existing trade data via the public API at `datapi.adrena.trade`. Competition logic runs off-chain; only value custody uses an on-chain Anchor escrow program (`BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ`, deployed to Solana devnet).
 3. **Self-sustaining economics.** Prize pools are funded by protocol fees and staked duel escrow, not perpetual treasury subsidy.
 4. **Progressive engagement.** A new user can start with a single honor duel and build toward Gauntlet entry and Seasonal Championship contention over time.
 
@@ -315,7 +315,7 @@ Capital deployed is the sum of initial margin for all positions opened during th
 
 - Both traders escrow symmetric stakes (challenger sets the amount; acceptor must match).
 - Supported currencies: ADX, USDC.
-- **Escrow:** Stakes are held by the Arena server in a custodial escrow wallet. (Future: on-chain escrow via a simple Solana program.)
+- **Escrow:** Stakes are held in an on-chain Anchor escrow program (`BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ`) with PDA-backed vaults, supporting both duels and clan wars via `CompetitionKind` enum. 9 instructions, security-audited (27 findings addressed).
 - **Protocol fee:** 2% of the total prize pool is retained as a protocol fee.
 - **Payout:** Winner receives 98% of the combined pool (their stake + opponent's stake - protocol fee).
 - **Minimum stake:** 10 ADX or 5 USDC.
@@ -929,7 +929,7 @@ This section describes the intended legal framing and is not legal advice. Actua
 - **Competition Engine:** Manages Gauntlet state machine (registration, rounds, eliminations, settlement), duel lifecycle, and clan war orchestration.
 - **Scoring Engine:** Computes Arena Score components from trade data. Runs normalization per competition context.
 - **Data Poller:** Periodically polls `datapi.adrena.trade/position` for trade data. Configurable polling interval (default: 30 seconds for active competitions, 5 minutes for idle).
-- **Escrow Manager:** Manages stake deposits and payouts for staked duels. (Phase 1: custodial wallet. Future: on-chain program.)
+- **Escrow Manager:** Manages stake deposits and payouts for staked duels and clan wars via the on-chain Anchor escrow program. PDA-backed vaults with allowlisted mints (ADX, USDC) and configurable treasury fee (max 5%).
 - **Notification Service:** Sends duel challenges, round transitions, and elimination notifications via WebSocket push.
 - **REST API:** Exposes endpoints for the UI and third-party integrations.
 - **Abuse Detection:** Runs pattern analysis on trade data and wallet relationships.
@@ -1059,7 +1059,7 @@ Clients subscribe to relevant channels based on their current view. The server u
 ### Security Considerations
 
 - **Wallet authentication:** All state-changing API calls require a signed message from the caller's Solana wallet.
-- **Escrow security:** Staked funds are held in a server-controlled hot wallet with multisig for withdrawals above threshold. Transition to on-chain escrow in future phases.
+- **Escrow security:** Staked funds are held in PDA-owned token vaults on Solana via the Anchor escrow program. Neither party can withdraw unilaterally. The server authority settles winners; accounts are closed on terminal states to reclaim rent. All arithmetic uses `checked_add`/`checked_mul`/`checked_sub`. Emergency pause/resume controls are available.
 - **Rate limiting:** All API endpoints are rate-limited per wallet to prevent abuse.
 - **Data integrity:** All scoring calculations are logged with inputs and outputs for auditability. Historical scores are immutable once a round/duel is settled.
 
