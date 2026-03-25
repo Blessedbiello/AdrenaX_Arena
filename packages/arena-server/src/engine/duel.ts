@@ -4,6 +4,7 @@ import type { DB, DuelConfig } from '../db/types.js';
 import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
 import { updateStreaks } from './streaks.js';
+import { awardSeasonPoints } from './season.js';
 import { Redis } from 'ioredis';
 import { env } from '../config.js';
 
@@ -293,6 +294,9 @@ export async function settleDuel(duelId: string) {
 
         // Update streak stats
         await updateStreaks(result.winner, loser);
+
+        // Award season points for duel win
+        await awardSeasonPoints(duel.competition_id, result.winner, 10, 'duel');
       }
 
       // Create reward entries for staked duels
