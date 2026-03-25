@@ -1,6 +1,6 @@
 # AdrenaX Arena Deployment Guide
 
-This guide covers local development setup, production deployment on Railway, environment configuration, database management, and monitoring.
+This guide covers local development setup, production deployment on Railway, Solana escrow program deployment, environment configuration, database management, and monitoring.
 
 ---
 
@@ -8,6 +8,7 @@ This guide covers local development setup, production deployment on Railway, env
 
 - [Local Development Setup](#local-development-setup)
 - [Railway Deployment](#railway-deployment)
+- [Solana Escrow Program Deployment](#solana-escrow-program-deployment)
 - [Environment Variables Reference](#environment-variables-reference)
 - [Docker Compose Services](#docker-compose-services)
 - [Database Management](#database-management)
@@ -25,6 +26,8 @@ This guide covers local development setup, production deployment on Railway, env
 | pnpm | 8+ | Package manager (monorepo workspaces) |
 | Docker & Docker Compose | Latest | PostgreSQL and Redis containers |
 | Git | Latest | Version control |
+| Rust + Anchor CLI | 0.30.1 | Only if deploying/modifying the escrow program |
+| Solana CLI | 1.18+ | Only if deploying/modifying the escrow program |
 
 ### 1. Clone and Install
 
@@ -34,10 +37,11 @@ cd AdrenaX_Arena
 pnpm install
 ```
 
-The monorepo contains two packages:
+The monorepo contains three main components:
 
 - `packages/arena-server` -- Express API server (port 3000)
 - `packages/arena-ui` -- Next.js frontend (port 3001)
+- `programs/arena-escrow` -- Anchor escrow program (Solana)
 
 ### 2. Configure Environment
 
@@ -75,8 +79,9 @@ Create the Arena schema tables:
 pnpm db:migrate
 ```
 
-This runs the inline Kysely migration in `packages/arena-server/src/db/migrate.ts`, creating all nine Arena tables:
+This runs the Kysely migration in `packages/arena-server/src/db/migrate.ts`, applying all 10 migrations and creating 18 tables:
 
+**Migration 001 -- Initial (9 tables):**
 - `arena_seasons`
 - `arena_competitions`
 - `arena_participants`
@@ -86,6 +91,37 @@ This runs the inline Kysely migration in `packages/arena-server/src/db/migrate.t
 - `arena_round_snapshots`
 - `arena_rewards`
 - `arena_season_points`
+
+**Migration 002 -- User Stats:**
+- `arena_user_stats` (streaks, titles, multipliers)
+
+**Migration 003 -- Clans:**
+- `arena_clans`
+- `arena_clan_members`
+
+**Migration 004 -- Webhooks:**
+- `arena_webhooks`
+- `arena_webhook_deliveries`
+
+**Migration 005 -- Settlement Snapshots:**
+- `arena_settlement_snapshots`
+
+**Migration 006 -- Admin:**
+- Adds `banned_at`, `banned_reason` columns to `arena_user_stats`
+- Adds `dispute_status` column to `arena_competitions`
+
+**Migration 007 -- Clan Wars:**
+- `arena_clan_wars`
+
+**Migration 008 -- Production Duel Escrow:**
+- Adds `escrow_state`, `challenger_deposit_tx`, `defender_deposit_tx` columns to `arena_duels`
+- `arena_clan_cooldowns`
+
+**Migration 009 -- Season Pass Progress:**
+- `arena_season_pass_progress`
+
+**Migration 010 -- Clan War Escrow:**
+- Adds `escrow_state`, `challenger_deposit_tx`, `defender_deposit_tx`, `escrow_tx`, `settlement_tx` columns to `arena_clan_wars`
 
 ### 5. Start Development Servers
 
@@ -113,10 +149,18 @@ curl http://localhost:3000/api/health
 Expected response:
 
 ```json
-{ "status": "ok", "timestamp": "2026-03-20T12:00:00.000Z" }
+{ "status": "ok", "timestamp": "2026-03-25T12:00:00.000Z" }
 ```
 
-### 7. Create Test Data
+### 7. Run Tests
+
+```bash
+pnpm test
+```
+
+Expect 132/132 tests passing across 7 test files. Tests use Vitest and are located in `packages/arena-server/src/engine/__tests__/`.
+
+### 8. Create Test Data
 
 You can create test duels and competitions using curl. First, get a nonce for a test wallet:
 
@@ -134,14 +178,6 @@ List duels to confirm the API is working:
 ```bash
 curl http://localhost:3000/api/arena/duels
 ```
-
-### Running Tests
-
-```bash
-pnpm test
-```
-
-Tests use Vitest and are located in `packages/arena-server/src/engine/__tests__/`.
 
 ---
 
@@ -184,8 +220,15 @@ Set the following environment variables (Railway auto-injects `DATABASE_URL` and
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (auto from plugin) |
 | `REDIS_URL` | `${{Redis.REDIS_URL}}` (auto from plugin) |
 | `ADRENA_API_BASE` | `https://datapi.adrena.trade` |
-| `CORS_ORIGIN` | Your frontend URL (e.g., `https://arena-ui-production.up.railway.app`) |
+| `CORS_ORIGIN` | Your frontend URL |
 | `CHALLENGE_CARD_BASE_URL` | Your frontend URL |
+| `SOLANA_RPC_URL` | `https://api.devnet.solana.com` (or mainnet) |
+| `PROGRAM_ID` | `BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ` |
+| `TREASURY_PUBKEY` | Your treasury wallet pubkey |
+| `OPERATOR_KEYPAIR_PATH` | Path to operator keypair JSON |
+| `ADX_MINT` | ADX token mint address |
+| `USDC_MINT` | USDC token mint address |
+| `ADMIN_API_KEY` | Strong random string for admin API access |
 | `DISCORD_BOT_TOKEN` | (optional) Discord bot token for notifications |
 | `DISCORD_CHANNEL_ID` | (optional) Discord channel ID for notifications |
 
@@ -197,34 +240,21 @@ Create a service for `arena-ui`:
 - **Build Command:** `pnpm install && pnpm build`
 - **Start Command:** `pnpm start`
 
-Set any necessary environment variables for the Next.js frontend (e.g., `NEXT_PUBLIC_API_URL` pointing to the API server URL).
+Set `NEXT_PUBLIC_API_URL` pointing to the API server URL.
 
 ### 5. Run Migrations in Production
 
-After the database is provisioned and before the first deployment, run migrations. You can do this using the Railway CLI or a one-off command:
+After the database is provisioned and before the first deployment, run migrations:
 
 **Using Railway CLI:**
 
 ```bash
-# Install Railway CLI
 npm install -g @railway/cli
-
-# Link to your project
 railway link
-
-# Run migrations against the production database
 railway run pnpm db:migrate
 ```
 
-**Using the Railway shell:**
-
-Navigate to your API server service in the Railway dashboard, open the shell, and run:
-
-```bash
-node -e "import('./dist/db/migrate.js')"
-```
-
-Or add a deploy hook in your build command:
+**Or add a deploy hook in your build command:**
 
 ```bash
 pnpm install && pnpm build && pnpm db:migrate
@@ -233,12 +263,90 @@ pnpm install && pnpm build && pnpm db:migrate
 ### 6. Configure Networking
 
 - Enable the public domain for the API server service.
-- If using WebSocket connections, ensure your Railway plan supports persistent connections. Railway's proxy handles WebSocket upgrades on the `/ws/duels` path automatically.
+- If using WebSocket connections, ensure your Railway plan supports persistent connections.
 - Set `CORS_ORIGIN` to your frontend's public URL.
 
 ### 7. Deploy
 
-Push to your connected GitHub branch. Railway triggers an automatic build and deploy. Monitor the deploy logs in the Railway dashboard.
+Push to your connected GitHub branch. Railway triggers an automatic build and deploy.
+
+---
+
+## Solana Escrow Program Deployment
+
+The Arena Escrow program is an Anchor 0.30.1 program providing trustless custody for staked competitions.
+
+### Current Deployment
+
+| Field | Value |
+|---|---|
+| **Program ID** | `BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ` |
+| **Cluster** | Devnet |
+| **IDL Account** | `9aYKXk2ppRD4PJfxtA9MLtdLuMV41TwuffqQ1EZJaoKy` |
+| **Upgrade Authority** | `3fMoA42W8MzvA86ZUFiRj5ayoEuwmDkz1qtZGiY5ooWR` |
+
+### Prerequisites
+
+```bash
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Install Solana CLI
+sh -c "$(curl -sSfL https://release.solana.com/v1.18.26/install)"
+
+# Install Anchor CLI
+cargo install --git https://github.com/coral-xyz/anchor --tag v0.30.1 anchor-cli
+```
+
+### Building the Program
+
+```bash
+cd programs/arena-escrow
+anchor build
+```
+
+The compiled program is at `target/deploy/arena_escrow.so`. The IDL is at `target/idl/arena_escrow.json`.
+
+### Deploying to Devnet
+
+```bash
+# Configure Solana CLI for devnet
+solana config set --url https://api.devnet.solana.com
+
+# Ensure your deployer keypair has SOL
+solana airdrop 5
+
+# Deploy
+anchor deploy --provider.cluster devnet
+
+# Initialize the config (run once after first deployment)
+# This sets the treasury, fee basis points, and allowed mints
+anchor run initialize-config -- \
+  --treasury <TREASURY_PUBKEY> \
+  --fee-bps 200 \
+  --mints <ADX_MINT>,<USDC_MINT>
+```
+
+### Deploying to Mainnet
+
+```bash
+solana config set --url https://api.mainnet-beta.solana.com
+anchor deploy --provider.cluster mainnet
+```
+
+Ensure the deployer wallet has sufficient SOL for program deployment rent (~3.5 SOL for a program of this size).
+
+### Post-Deployment Verification
+
+```bash
+# Verify program is deployed
+solana program show BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ
+
+# Verify IDL is published
+anchor idl fetch BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ --provider.cluster devnet
+```
+
+For full escrow program documentation, see [escrow.md](escrow.md).
 
 ---
 
@@ -246,17 +354,68 @@ Push to your connected GitHub branch. Railway triggers an automatic build and de
 
 All environment variables are validated at startup using Zod in `packages/arena-server/src/config.ts`. The server will fail to start if required variables are missing or malformed.
 
+### Core Server
+
 | Variable | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `NODE_ENV` | `string` | No | `development` | Environment mode. One of: `development`, `production`, `test`. Controls SSL for database connections and other behavior. |
-| `PORT` | `number` | No | `3000` | HTTP server port. The WebSocket server runs on the same port. |
-| `DATABASE_URL` | `string` | No | `postgresql://arena:arena_dev@localhost:5432/adrenax_arena` | PostgreSQL connection string. In production, SSL is enabled automatically (`rejectUnauthorized: false`). Connection pool max: 20, idle timeout: 30s. |
-| `REDIS_URL` | `string` | No | `redis://localhost:6379` | Redis connection string. Used by BullMQ for the trade indexer job queue. If Redis is unavailable, the server starts but logs a warning. |
-| `ADRENA_API_BASE` | `string` | No | `https://datapi.adrena.trade` | Base URL for the Adrena data API. The indexer polls `/position` and other endpoints to track participant trades. |
-| `DISCORD_BOT_TOKEN` | `string` | No | *(empty)* | Discord bot token for posting duel results and competition updates. Optional -- the server runs without Discord integration if not set. |
-| `DISCORD_CHANNEL_ID` | `string` | No | *(empty)* | Discord channel ID where the bot posts notifications. Required if `DISCORD_BOT_TOKEN` is set. |
-| `CHALLENGE_CARD_BASE_URL` | `string` | No | `http://localhost:3001` | Base URL used when generating challenge card links. Should point to the frontend in production. |
-| `CORS_ORIGIN` | `string` | No | `http://localhost:3001` | Allowed CORS origin. Set to your frontend URL in production. Supports a single origin string. |
+| `NODE_ENV` | `string` | No | `development` | Environment mode. One of: `development`, `production`, `test`. |
+| `PORT` | `number` | No | `3000` | HTTP server port. WebSocket runs on the same port. |
+| `DATABASE_URL` | `string` | No | `postgresql://arena:arena_dev@localhost:5432/adrenax_arena` | PostgreSQL connection string. SSL enabled in production. Pool max: 20, idle timeout: 30s. |
+| `REDIS_URL` | `string` | No | `redis://localhost:6379` | Redis connection string for BullMQ. Server starts without Redis but logs a warning. |
+| `ADRENA_API_BASE` | `string` | No | `https://datapi.adrena.trade` | Base URL for the Adrena data API. |
+| `DEV_MODE_SKIP_AUTH` | `boolean` | No | `false` | Skip wallet signature verification. **Blocked in production.** |
+| `CORS_ORIGIN` | `string` | No | `http://localhost:3001` | Allowed CORS origin. |
+| `CHALLENGE_CARD_BASE_URL` | `string` | No | `http://localhost:3001` | Base URL for challenge card links. |
+
+### Discord
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `DISCORD_BOT_TOKEN` | `string` | No | *(empty)* | Discord bot token for notifications. Optional. |
+| `DISCORD_CHANNEL_ID` | `string` | No | *(empty)* | Discord channel ID. Required if `DISCORD_BOT_TOKEN` is set. |
+
+### Solana / Escrow
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `SOLANA_RPC_URL` | `string` | No | `http://localhost:8899` | Solana RPC endpoint. Use devnet or mainnet URL. |
+| `PROGRAM_ID` | `string` | No | *(empty)* | Arena Escrow program ID. Enables escrow features when set. |
+| `ESCROW_CONFIG_PDA` | `string` | No | *(empty)* | Pre-computed config PDA (optional, derived if not set). |
+| `TREASURY_PUBKEY` | `string` | Prod | *(empty)* | Treasury wallet for protocol fees. **Required in production if PROGRAM_ID is set.** |
+| `OPERATOR_KEYPAIR_PATH` | `string` | Prod | *(empty)* | Path to operator keypair JSON. **Required in production if PROGRAM_ID is set.** |
+| `ADX_MINT` | `string` | Prod | *(empty)* | ADX token mint address. **Required in production if PROGRAM_ID is set.** |
+| `USDC_MINT` | `string` | Prod | *(empty)* | USDC token mint address. **Required in production if PROGRAM_ID is set.** |
+
+### Admin
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `ADMIN_API_KEY` | `string` | No | *(empty)* | API key for admin endpoints. |
+| `ADMIN_WALLETS` | `string` | No | *(empty)* | Comma-separated list of admin wallet pubkeys. |
+
+### Adrena Integration
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `ADRENA_MUTAGEN_API_URL` | `string` | No | *(empty)* | Adrena Mutagen API URL. Adapters log locally when not set. |
+| `ADRENA_QUEST_WEBHOOK_URL` | `string` | No | *(empty)* | Adrena Quest webhook URL. |
+| `ADRENA_LEADERBOARD_API_URL` | `string` | No | *(empty)* | Adrena Leaderboard API URL. |
+
+### Anti-Sybil
+
+| Variable | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `ENABLE_SYBIL_CHECKS` | `boolean` | No | `false` | Enable anti-sybil checks on duel creation. |
+| `MIN_WALLET_AGE_DAYS` | `number` | No | `7` | Minimum wallet age in days. |
+| `MIN_CLOSED_POSITIONS` | `number` | No | `3` | Minimum closed positions to participate. |
+
+### Production Safety
+
+The server enforces these rules in production (`NODE_ENV=production`):
+
+- `DEV_MODE_SKIP_AUTH=true` causes the server to exit with a critical error.
+- `CHALLENGE_CARD_BASE_URL` or `CORS_ORIGIN` containing "localhost" triggers a console warning.
+- If `PROGRAM_ID` is set, `TREASURY_PUBKEY`, `OPERATOR_KEYPAIR_PATH`, `ADX_MINT`, and `USDC_MINT` must all be set or the server exits.
 
 ---
 
@@ -316,7 +475,7 @@ docker-compose restart postgres
 
 ### Running Migrations
 
-Migrations are defined inline in `packages/arena-server/src/db/migrate.ts` using Kysely's `Migrator`. There is currently one migration (`001_initial`) that creates all Arena tables.
+Migrations are defined inline in `packages/arena-server/src/db/migrate.ts` using Kysely's `Migrator`. There are 10 migrations creating 18 tables.
 
 ```bash
 # From the project root
@@ -344,11 +503,7 @@ psql postgresql://arena:arena_dev@localhost:5432/adrenax_arena
 **Production (Railway):**
 
 ```bash
-# Using Railway CLI
 railway connect postgres
-
-# Or copy the DATABASE_URL from Railway dashboard and use psql
-psql "$DATABASE_URL"
 ```
 
 ### Useful Queries
@@ -363,8 +518,20 @@ FROM arena_participants
 WHERE competition_id = '<uuid>'
 ORDER BY roi_percent DESC;
 
--- Recent predictions
-SELECT * FROM arena_predictions ORDER BY prediction_locked_at DESC LIMIT 20;
+-- Clan rankings
+SELECT name, tag, total_war_score, wars_won, wars_played, member_count
+FROM arena_clans ORDER BY total_war_score DESC;
+
+-- Season standings
+SELECT user_pubkey, total_points, duel_points, gauntlet_points, clan_points
+FROM arena_season_points WHERE season_id = 1 ORDER BY total_points DESC;
+
+-- Pending webhook deliveries
+SELECT * FROM arena_webhook_deliveries WHERE status = 'pending' ORDER BY created_at;
+
+-- Check escrow states
+SELECT id, status, escrow_state, stake_amount, stake_token
+FROM arena_duels WHERE escrow_state != 'not_required';
 
 -- Check migration status
 SELECT * FROM kysely_migration ORDER BY timestamp;
@@ -375,11 +542,8 @@ SELECT * FROM kysely_migration ORDER BY timestamp;
 The database types in `packages/arena-server/src/db/types.ts` are manually defined to match the migration schema. If you modify the schema, you can regenerate types from the live database:
 
 ```bash
-# Requires a running database with the current schema
 pnpm db:generate
 ```
-
-This runs `kysely-codegen --out-file src/db/types.ts` and produces TypeScript interfaces from the actual PostgreSQL schema. Review the output and adjust any custom type annotations (such as union types for status fields) that the code generator may not infer.
 
 ---
 
@@ -398,8 +562,6 @@ curl http://localhost:3000/api/health
 | 200 | `{ "status": "ok", "timestamp": "..." }` | Server and database are healthy |
 | 503 | `{ "status": "error", "message": "Database unavailable" }` | Database connection failed |
 
-For production monitoring, configure your platform's health check to poll this endpoint. On Railway, this is set in the service settings under "Health Check Path": `/api/health`.
-
 ### Log Output
 
 The server writes structured log lines to stdout. Log prefixes indicate the subsystem:
@@ -410,20 +572,23 @@ The server writes structured log lines to stdout. Log prefixes indicate the subs
 | `[Worker]` | BullMQ indexer | `[Worker] Indexer started` |
 | `[Cleanup]` | Stale duel expiry | `[Cleanup] Expired 3 stale duels` |
 | `[Duels]` | Duel route errors | `[Duels] Create error: ...` |
+| `[Clans]` | Clan route errors | `[Clans] Challenge error: ...` |
+| `[Season]` | Season route errors | `[Season] Standings error: ...` |
 | `[Competitions]` | Competition route errors | `[Competitions] Register error: ...` |
+| `[Admin]` | Admin route errors | `[Admin] Create season error: ...` |
+| `[Webhooks]` | Webhook errors | `[Webhooks] Create error: ...` |
 | `[Users]` | User route errors | `[Users] Profile error: ...` |
 | `[SSE]` | SSE stream errors | `[SSE] Duel stream error: ...` |
 | `[Card]` | Challenge card generation | `[Card] Generation error: ...` |
-
-All error-level logs include the full error object. In production, pipe stdout to your log aggregation service (Railway captures logs automatically).
+| `[Config]` | Config validation | `[Config] WARNING: CORS_ORIGIN contains "localhost"` |
 
 ### Background Jobs
 
 The server runs two background processes:
 
-1. **Trade Indexer** (BullMQ worker): Polls `ADRENA_API_BASE/position` to fetch trades for active competition participants. Requires Redis. If Redis is unavailable at startup, the server logs a warning and continues without indexing.
+1. **Trade Indexer** (BullMQ worker): Polls `ADRENA_API_BASE/position` to fetch trades for active competition participants. Requires Redis. Adaptive polling: 30s default, 10s in the final 5 minutes.
 
-2. **Stale Duel Expiry** (setInterval, 60s): Checks for pending duels past their `expires_at` time and transitions them to `expired`. Also cancels the parent competition. Logs a count when duels are expired.
+2. **Stale Duel Expiry** (setInterval, 60s): Checks for pending duels past their `expires_at` time and transitions them to `expired`. Also cancels the parent competition.
 
 ### Common Troubleshooting
 
@@ -432,30 +597,29 @@ The server runs two background processes:
 - Check the `DATABASE_URL` environment variable.
 - Ensure migrations have been run: `pnpm db:migrate`
 
+**Server exits with "DEV_MODE_SKIP_AUTH is enabled in production":**
+- This is a safety check. Set `DEV_MODE_SKIP_AUTH=false` or remove it in production.
+
+**Server exits with "Escrow is enabled but required settings are missing":**
+- If `PROGRAM_ID` is set in production, you must also set `TREASURY_PUBKEY`, `OPERATOR_KEYPAIR_PATH`, `ADX_MINT`, and `USDC_MINT`.
+
 **"Failed to start indexer (Redis may be unavailable)":**
 - This is a warning, not a fatal error. The API server functions without Redis.
 - If you need trade indexing, ensure Redis is running: `docker-compose up -d redis`
 
 **CORS errors in the browser:**
 - Verify `CORS_ORIGIN` matches the exact origin of your frontend (protocol + host + port).
-- For local development, the default `http://localhost:3001` matches the Next.js dev server.
 
 **WebSocket connection refused:**
 - The WebSocket server runs on the same port as HTTP at path `/ws/duels`.
 - Ensure you are connecting to `ws://localhost:3000/ws/duels` (not `wss://` for local dev).
-- In production behind a proxy, ensure WebSocket upgrades are supported.
 
 **Migrations fail with "relation already exists":**
-- Kysely tracks applied migrations in the `kysely_migration` table. If the table exists but is corrupt, you can manually drop it and re-run: `DROP TABLE kysely_migration; DROP TABLE kysely_migration_lock;`
-- Then re-run `pnpm db:migrate`. This will re-apply all migrations from scratch, so only do this on a fresh database or after backing up.
-
-**Rate limiting in development:**
-- The general rate limit is 100 requests per minute. If you hit this during testing, restart the server or wait 60 seconds.
-- Rate limit responses return status 429 with `{ "success": false, "error": "RATE_LIMIT", "message": "Too many requests" }`.
-
-**Challenge card generation fails:**
-- The card renderer uses Satori and @resvg/resvg-js. If these fail (e.g., missing system fonts in production), the endpoint falls back to returning JSON metadata.
-- Ensure the production environment has basic font support or include fonts in the deployment.
+- Kysely tracks applied migrations in the `kysely_migration` table. If corrupt, drop it and re-run:
+  ```sql
+  DROP TABLE kysely_migration; DROP TABLE kysely_migration_lock;
+  ```
+  Then re-run `pnpm db:migrate`. Only do this on a fresh database or after backing up.
 
 ### Graceful Shutdown
 

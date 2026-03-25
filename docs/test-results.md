@@ -1,4 +1,4 @@
-# AdrenaX Arena — Test Competition Results
+# AdrenaX Arena -- Test Competition Results
 
 ## Test Environment
 - Date: 2026-03-25
@@ -64,13 +64,13 @@ The `run-test-competition.ts` script validates 50+ checks across 17 test categor
 ## Unit Test Results (132/132 passing)
 
 ```
- ✓ src/engine/__tests__/utils.test.ts        (4 tests)
- ✓ src/engine/__tests__/anti-sybil.test.ts   (7 tests)
- ✓ src/engine/__tests__/gauntlet.test.ts     (8 tests)
- ✓ src/engine/__tests__/duel-features.test.ts (27 tests)
- ✓ src/engine/__tests__/streaks.test.ts      (26 tests)
- ✓ src/engine/__tests__/scoring.test.ts      (53 tests)
- ✓ src/engine/__tests__/clan.test.ts         (7 tests)
+ src/engine/__tests__/utils.test.ts        (4 tests)
+ src/engine/__tests__/anti-sybil.test.ts   (7 tests)
+ src/engine/__tests__/gauntlet.test.ts     (8 tests)
+ src/engine/__tests__/duel-features.test.ts (27 tests)
+ src/engine/__tests__/streaks.test.ts      (26 tests)
+ src/engine/__tests__/scoring.test.ts      (53 tests)
+ src/engine/__tests__/clan.test.ts         (7 tests)
 
  Test Files  7 passed (7)
       Tests  132 passed (132)
@@ -83,7 +83,6 @@ Test coverage:
 - **gauntlet.test.ts** (8 tests): elimination math (8->4->2->1), odd numbers, forfeits, progressive 3-round chain
 - **clan.test.ts** (7 tests): synergy bonus calculation, averaging, edge cases
 - **utils.test.ts** (4 tests): hashToInt namespace isolation, determinism, positivity, empty string
-- **anti-sybil.test.ts** (7 tests): collusion score heuristics, frequency flags, even win distribution
 - **anti-sybil.test.ts** (7 tests): collusion score heuristics, frequency flags, even win distribution
 
 ## Anchor Escrow Program (Devnet)
@@ -102,7 +101,13 @@ addressed and redeployed (vault ownership, winner/treasury constraints,
 escrow_id length, account closing, checked_add, paused checks, owner
 constraints on cancel/refund, settlement recovery states).
 
-## New Features (Sprint 3-4)
+## Feature Summary
+
+### Competition Modes (4)
+- **Duels**: 1v1 head-to-head, honor or staked (on-chain escrow), open or direct challenges
+- **The Gauntlet**: Multi-round progressive elimination (1-5 rounds, 2-128 players)
+- **Clan Wars**: Team-based (3-5 members), synergy bonuses, staked escrow support
+- **Seasonal Championship**: 4-week meta-competition with season pass milestones
 
 ### Open Challenge Board
 - Duels can be created without a defender (broadcast challenges)
@@ -132,38 +137,23 @@ constraints on cancel/refund, settlement recovery states).
 - Gauntlet open/results notifications
 - Graceful fallback when no bot token configured
 
-### Multi-Round Gauntlet
-- Configurable 1-5 rounds with custom durations and intermissions
-- Bottom-50% elimination per round, forfeit for 0 trades
-- Per-round snapshots and arena_score ranking
-- Round transitions with intermission scheduling
-
-### Clan Wars
-- Create/join/leave clans (max 5 members, one clan per wallet)
-- Clan rankings by war score
-- Synergy bonus: +5% per member beyond 1 (max +20%)
-- Full UI pages for clan management
-
-### Seasonal Championship
-- Season points from duels (10 pts/win), gauntlets (15-50 pts)
-- Season leaderboard endpoint
-- Admin season lifecycle management
-
 ### On-Chain Escrow (Devnet)
-- Anchor program with 8 instructions for trustless staked duels
+- Anchor 0.30.1 program with 9 instructions for trustless staked competitions
 - PDA-backed escrow vaults with SPL token transfers
 - Allowlisted mints (ADX, USDC), configurable treasury fee (max 5%)
 - Accounts closed on terminal states to reclaim rent
-- Full security audit: vault ownership, winner/treasury constraints, checked arithmetic
+- Supports both duels and clan wars via CompetitionKind enum
+- Full security audit: 27 findings addressed, vault ownership, winner/treasury constraints, checked arithmetic
 
 ### Admin & Integration
 - Admin API with API key auth: season CRUD, ban/unban, escrow pause/resume
-- 4 Adrena adapters registered: Mutagen, Quest, Streak, Leaderboard
-- Persistent webhooks with exponential backoff retry and dead-letter
+- 4 Adrena adapters with real implementations: Mutagen, Quest, Streak, Leaderboard
+- Persistent DB-backed webhooks with exponential backoff retry and dead-letter
 - Settlement snapshots for immutable audit trail
 - Pino structured logging
 
 ### Infrastructure
+- 10 database migrations, 18 tables
 - Bundled Inter fonts for Docker reliability
 - Production safety: refuse to start with dev auth bypass
 - Production warnings for localhost URLs
