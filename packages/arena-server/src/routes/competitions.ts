@@ -42,6 +42,18 @@ competitionRouter.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// Season leaderboard
+competitionRouter.get('/seasons/:id/leaderboard', async (req: Request, res: Response) => {
+  try {
+    const { getSeasonLeaderboard } = await import('../engine/season.js');
+    const leaderboard = await getSeasonLeaderboard(Number(req.params.id));
+    res.json({ success: true, data: leaderboard });
+  } catch (err) {
+    console.error('[Competitions] Season leaderboard error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
 // Get competition details
 competitionRouter.get('/:id', async (req: Request, res: Response) => {
   try {
@@ -109,12 +121,22 @@ const CreateGauntletSchema = z.object({
   name: z.string().min(3).max(64),
   maxParticipants: z.number().min(2).max(128).optional().default(16),
   durationHours: z.number().min(1).max(168).optional().default(24),
+  rounds: z.number().min(1).max(5).optional().default(3),
+  roundDurations: z.array(z.number().min(1).max(168)).optional(),
+  intermissionMinutes: z.number().min(10).max(120).optional().default(30),
 });
 
 competitionRouter.post('/gauntlet', requireAuth, async (req: Request, res: Response) => {
   try {
     const input = CreateGauntletSchema.parse(req.body);
-    const competition = await createGauntlet(input);
+    const competition = await createGauntlet({
+      name: input.name,
+      maxParticipants: input.maxParticipants,
+      durationHours: input.durationHours,
+      rounds: input.rounds,
+      roundDurations: input.roundDurations,
+      intermissionMinutes: input.intermissionMinutes,
+    });
     res.status(201).json({ success: true, data: competition });
   } catch (err) {
     if (err instanceof z.ZodError) {
@@ -122,6 +144,23 @@ competitionRouter.post('/gauntlet', requireAuth, async (req: Request, res: Respo
       return;
     }
     console.error('[Competitions] Create gauntlet error:', err);
+    res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
+  }
+});
+
+// Get round snapshots for a competition
+competitionRouter.get('/:id/rounds', async (req: Request, res: Response) => {
+  try {
+    const db = getDb();
+    const snapshots = await db
+      .selectFrom('arena_round_snapshots')
+      .where('competition_id', '=', req.params.id as string)
+      .orderBy('round_number', 'asc')
+      .selectAll()
+      .execute();
+    res.json({ success: true, data: snapshots });
+  } catch (err) {
+    console.error('[Competitions] Get rounds error:', err);
     res.status(500).json({ success: false, error: 'INTERNAL_ERROR' });
   }
 });

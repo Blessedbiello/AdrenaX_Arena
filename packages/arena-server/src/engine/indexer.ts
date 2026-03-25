@@ -95,6 +95,20 @@ export function startIndexerWorker(redisUrl: string): Worker {
           await settleGauntlet(competitionId);
           break;
         }
+        case 'settle-gauntlet-round': {
+          const { competitionId } = job.data;
+          const { settleGauntletRound } = await import('./gauntlet.js');
+          console.log(`[Worker] Settling gauntlet round for ${competitionId}`);
+          await settleGauntletRound(competitionId);
+          break;
+        }
+        case 'activate-gauntlet-round': {
+          const { competitionId } = job.data;
+          const { activateGauntletRound } = await import('./gauntlet.js');
+          console.log(`[Worker] Activating gauntlet round for ${competitionId}`);
+          await activateGauntletRound(competitionId);
+          break;
+        }
         case 'index-positions':
         default: {
           const { competitionId, userPubkey } = job.data;
@@ -238,6 +252,17 @@ async function indexParticipantPositions(
     const roi = totalCollateral > 0 ? (totalPnl / totalCollateral) * 100 : 0;
     const winRate = totalTrades > 0 ? wins / totalTrades : 0;
 
+    // Compute arena_score from eligible trades for this competition window
+    const { calculateArenaScore } = await import('./scoring.js');
+    const eligibleTradesForScore = closedPositions.map(pos => ({
+      pnl_usd: Number(pos.pnl) || 0,
+      fees_usd: Number(pos.fees) || 0,
+      collateral_usd: Number(pos.collateral_amount) || 0,
+      entry_date: new Date(pos.entry_date!),
+      exit_date: new Date(pos.exit_date!),
+    }));
+    const arenaScore = calculateArenaScore(eligibleTradesForScore);
+
     await db
       .updateTable('arena_participants')
       .set({
@@ -246,6 +271,7 @@ async function indexParticipantPositions(
         total_volume_usd: Number(scores.total_volume),
         positions_closed: totalTrades,
         win_rate: winRate,
+        arena_score: arenaScore,
         last_indexed_at: new Date(),
         updated_at: new Date(),
       })
@@ -341,6 +367,54 @@ export async function scheduleGauntletSettlement(
     { competitionId },
     {
       jobId: `settle-gauntlet-${competitionId}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+  );
+}
+
+/**
+ * Schedule a gauntlet round settlement as a delayed job.
+ * Uses a timestamp-scoped jobId to avoid conflicts across rounds.
+ */
+export async function scheduleGauntletRoundSettlement(
+  redisUrl: string,
+  competitionId: string,
+  settleAt: Date
+): Promise<void> {
+  const queue = getIndexerQueue(redisUrl);
+  const delay = Math.max(0, settleAt.getTime() - Date.now());
+
+  await queue.add(
+    'settle-gauntlet-round',
+    { competitionId },
+    {
+      jobId: `settle-round-${competitionId}-${Date.now()}`,
+      delay,
+      removeOnComplete: true,
+      removeOnFail: false,
+    }
+  );
+}
+
+/**
+ * Schedule a gauntlet round activation (post-intermission) as a delayed job.
+ * Uses a timestamp-scoped jobId to avoid conflicts across rounds.
+ */
+export async function scheduleGauntletRoundActivation(
+  redisUrl: string,
+  competitionId: string,
+  activateAt: Date
+): Promise<void> {
+  const queue = getIndexerQueue(redisUrl);
+  const delay = Math.max(0, activateAt.getTime() - Date.now());
+
+  await queue.add(
+    'activate-gauntlet-round',
+    { competitionId },
+    {
+      jobId: `activate-round-${competitionId}-${Date.now()}`,
       delay,
       removeOnComplete: true,
       removeOnFail: false,
