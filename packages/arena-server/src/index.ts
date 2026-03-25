@@ -7,6 +7,7 @@ import { env } from './config.js';
 import { duelRouter } from './routes/duels.js';
 import { competitionRouter } from './routes/competitions.js';
 import { userRouter } from './routes/users.js';
+import { clanRouter } from './routes/clans.js';
 import { generalLimiter } from './middleware/rate-limit.js';
 import { getDb, closeDb } from './db/connection.js';
 import { startIndexerWorker, closeIndexer } from './engine/indexer.js';
@@ -39,6 +40,7 @@ app.get('/api/health', async (_req, res) => {
 app.use('/api/arena/duels', duelRouter);
 app.use('/api/arena/competitions', competitionRouter);
 app.use('/api/arena/users', userRouter);
+app.use('/api/arena/clans', clanRouter);
 
 // Challenge card image endpoint (placeholder — will be replaced with satori)
 app.get('/api/arena/challenge/:id/card.png', async (req, res) => {

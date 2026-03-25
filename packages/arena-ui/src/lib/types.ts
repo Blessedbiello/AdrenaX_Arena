@@ -121,6 +121,26 @@ export interface RevengeWindow {
   ttlSeconds: number;
 }
 
+export interface Clan {
+  id: string;
+  name: string;
+  tag: string;
+  leader_pubkey: string;
+  member_count: number;
+  total_war_score: number;
+  wars_won: number;
+  wars_played: number;
+  created_at: string;
+}
+
+export interface ClanMember {
+  id: string;
+  clan_id: string;
+  user_pubkey: string;
+  role: 'leader' | 'officer' | 'member';
+  joined_at: string;
+}
+
 export interface ApiResponse<T> {
   success: boolean;
   error?: string;

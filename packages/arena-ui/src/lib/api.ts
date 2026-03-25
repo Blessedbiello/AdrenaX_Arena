@@ -1,4 +1,4 @@
-import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak, RevengeWindow } from './types';
+import type { ApiResponse, Duel, DuelDetails, Competition, Participant, PredictionStats, UserProfile, CreateDuelInput, LeaderboardEntry, UserStreak, RevengeWindow, Clan, ClanMember } from './types';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
 
@@ -143,6 +143,30 @@ class ArenaAPI {
 
   getLeaderboardStreamUrl(competitionId: string): string {
     return `${API_BASE}/api/arena/competitions/${competitionId}/stream`;
+  }
+
+  // Clans
+  async createClan(name: string, tag: string): Promise<Clan> {
+    return this.fetch('/api/arena/clans', {
+      method: 'POST',
+      body: JSON.stringify({ name, tag }),
+    });
+  }
+
+  async joinClan(clanId: string): Promise<ClanMember> {
+    return this.fetch(`/api/arena/clans/${clanId}/join`, { method: 'POST' });
+  }
+
+  async leaveClan(): Promise<{ disbanded: boolean }> {
+    return this.fetch('/api/arena/clans/membership', { method: 'DELETE' });
+  }
+
+  async getClanRankings(): Promise<Clan[]> {
+    return this.fetch('/api/arena/clans/rankings');
+  }
+
+  async getClanDetails(clanId: string): Promise<{ clan: Clan; members: ClanMember[] }> {
+    return this.fetch(`/api/arena/clans/${clanId}`);
   }
 }
 
