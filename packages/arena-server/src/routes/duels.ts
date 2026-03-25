@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { createDuel, acceptDuel, getDuelDetails, DuelError, createRevengeDuel, getRevengeWindows } from '../engine/duel.js';
 import { requireAuth, generateNonce } from '../middleware/auth.js';
+import { revengeLimiter } from '../middleware/rate-limit.js';
 import { getDb } from '../db/connection.js';
 import { arenaEvents } from '../adrena/integration.js';
 
@@ -222,7 +223,7 @@ duelRouter.get('/:id/stream', async (req: Request, res: Response) => {
 });
 
 // Create a revenge duel
-duelRouter.post('/revenge', requireAuth, async (req: Request, res: Response) => {
+duelRouter.post('/revenge', revengeLimiter, requireAuth, async (req: Request, res: Response) => {
   try {
     const wallet = (req as any).wallet as string;
     const { opponentPubkey } = z.object({ opponentPubkey: z.string().min(32).max(44) }).parse(req.body);

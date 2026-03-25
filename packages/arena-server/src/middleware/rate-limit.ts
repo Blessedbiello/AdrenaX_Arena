@@ -22,3 +22,12 @@ export const sseLimiter = rateLimit({
   max: 10,
   message: { success: false, error: 'RATE_LIMIT', message: 'Too many stream connections' },
 });
+
+export const revengeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 3, // Max 3 revenge duels per 5 minutes
+  keyGenerator: (req) => {
+    return (req.headers['x-wallet'] as string) || req.ip || 'unknown';
+  },
+  message: { success: false, error: 'RATE_LIMIT', message: 'Too many revenge attempts' },
+});
