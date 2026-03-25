@@ -139,7 +139,7 @@ async function main() {
     method: 'POST',
     body: JSON.stringify({
       name: 'Test Gauntlet Alpha',
-      maxParticipants: 16,
+      maxParticipants: 64,
       durationHours: 24,
     }),
   });
