@@ -61,18 +61,19 @@ The `run-test-competition.ts` script validates 50+ checks across 17 test categor
 - [x] Production config refuses to start with DEV_MODE_SKIP_AUTH=true
 - [x] Adrena API schema validated against live data (29/29 fields)
 
-## Unit Test Results (128/128 passing)
+## Unit Test Results (132/132 passing)
 
 ```
- ✓ src/engine/__tests__/anti-sybil.test.ts  (7 tests)
- ✓ src/engine/__tests__/gauntlet.test.ts    (8 tests)
+ ✓ src/engine/__tests__/utils.test.ts        (4 tests)
+ ✓ src/engine/__tests__/anti-sybil.test.ts   (7 tests)
+ ✓ src/engine/__tests__/gauntlet.test.ts     (8 tests)
  ✓ src/engine/__tests__/duel-features.test.ts (27 tests)
- ✓ src/engine/__tests__/streaks.test.ts     (26 tests)
- ✓ src/engine/__tests__/scoring.test.ts     (53 tests)
- ✓ src/engine/__tests__/clan.test.ts        (7 tests)
+ ✓ src/engine/__tests__/streaks.test.ts      (26 tests)
+ ✓ src/engine/__tests__/scoring.test.ts      (53 tests)
+ ✓ src/engine/__tests__/clan.test.ts         (7 tests)
 
- Test Files  6 passed (6)
-      Tests  128 passed (128)
+ Test Files  7 passed (7)
+      Tests  132 passed (132)
 ```
 
 Test coverage:
@@ -81,6 +82,8 @@ Test coverage:
 - **duel-features.test.ts** (27 tests): open challenge rules, revenge windows, type filters, reward calculations, API error handling, config safety
 - **gauntlet.test.ts** (8 tests): elimination math (8->4->2->1), odd numbers, forfeits, progressive 3-round chain
 - **clan.test.ts** (7 tests): synergy bonus calculation, averaging, edge cases
+- **utils.test.ts** (4 tests): hashToInt namespace isolation, determinism, positivity, empty string
+- **anti-sybil.test.ts** (7 tests): collusion score heuristics, frequency flags, even win distribution
 - **anti-sybil.test.ts** (7 tests): collusion score heuristics, frequency flags, even win distribution
 
 ## Anchor Escrow Program (Devnet)
@@ -91,10 +94,13 @@ Cluster:    Solana Devnet
 IDL:        9aYKXk2ppRD4PJfxtA9MLtdLuMV41TwuffqQ1EZJaoKy
 ```
 
-8 instructions: initialize_config, create_duel_escrow, accept_duel_escrow,
-cancel_expired_duel, settle_duel_winner, refund_void_duel, pause_program,
-resume_program. Full security audit findings addressed (vault ownership,
-winner/treasury constraints, duel_id length, account closing, checked_add).
+9 instructions: initialize_config, update_config, create_competition_escrow,
+fund_competition_side, cancel_competition_escrow, settle_competition_winner,
+refund_competition_draw, pause_program, resume_program. Generalized for both
+duels and clan wars via CompetitionKind enum. All 27 security audit findings
+addressed and redeployed (vault ownership, winner/treasury constraints,
+escrow_id length, account closing, checked_add, paused checks, owner
+constraints on cancel/refund, settlement recovery states).
 
 ## New Features (Sprint 3-4)
 
@@ -165,7 +171,7 @@ winner/treasury constraints, duel_id length, account closing, checked_add).
 - SSE rate limiting on duel and competition streams
 - Revenge rate limiter (3 per 5 min per wallet)
 - Anti-sybil: trade history check, collusion detection (risk score 0-100)
-- 128 unit tests across 6 test files
+- 132 unit tests across 7 test files
 - 4-component Arena Score: ROI, Win Rate, Risk-Adjusted, Consistency
 
 ## Recommendations

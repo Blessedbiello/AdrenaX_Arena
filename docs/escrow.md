@@ -9,65 +9,98 @@
 | **Cluster** | Devnet (`https://api.devnet.solana.com`) |
 | **Upgrade Authority** | `3fMoA42W8MzvA86ZUFiRj5ayoEuwmDkz1qtZGiY5ooWR` |
 | **Framework** | Anchor 0.30.1 |
-| **Size** | 331,144 bytes |
+| **Size** | 366,152 bytes |
+| **Last Deployed** | 2026-03-25 (post-audit fix redeployment) |
 
 ## Overview
 
-The Arena Escrow program provides trustless custody for staked duels on Solana. Both participants deposit SPL tokens into a PDA-owned vault. The server authority settles the winner or refunds on void/draw. Protocol fees route to a configurable treasury.
+The Arena Escrow program provides trustless custody for staked competitions (duels and clan wars) on Solana. Both sides deposit SPL tokens into a PDA-owned associated token vault. The server authority settles the winner or refunds on void/draw. Protocol fees route to a configurable treasury. The program is generic — the same instructions handle both 1v1 duels and clan war escrows via the `CompetitionKind` enum.
 
-## Instructions
+## Instructions (9 total)
 
 ### `initialize_config`
 Creates the global ArenaConfig PDA. Sets treasury wallet, fee basis points (max 500 = 5%), and allowed token mints.
 
 **Seeds:** `[b"config"]`
 **Signer:** Authority (upgrade authority)
+**Constraints:**
+- `fee_bps` <= 500
+- `allowed_mints` must not be empty
 
-### `create_duel_escrow`
-Creates a DuelEscrow PDA and transfers the challenger's stake to the escrow vault.
+### `update_config`
+Updates treasury, fee, or allowed mints. Authority-only.
 
-**Seeds:** `[b"duel", duel_id.as_bytes()]`
-**Signer:** Challenger
+**Signer:** Authority
+**Constraints:**
+- Caller must be `config.authority`
+- If updating `fee_bps`: must be <= 500
+- If updating `allowed_mints`: must not be empty
+- Emits `ConfigUpdated` event
+
+### `create_competition_escrow`
+Creates a CompetitionEscrow PDA and transfers side A's (challenger's) stake to the escrow vault. Supports both duels (`CompetitionKind::Duel`) and clan wars (`CompetitionKind::ClanWar`).
+
+**Seeds:** `[b"competition", escrow_id.as_bytes()]`
+**Signer:** Side A controller (challenger)
 **Constraints:**
 - Program must not be paused
-- Mint must be in allowed_mints list
-- `duel_id` must be 1-32 bytes
+- Mint must be in `allowed_mints` list
+- `escrow_id` must be 1-32 bytes (UUIDs must have hyphens stripped)
 - `expires_at` must be in the future
+- `expected_side_b_amount` must be > 0
+- Side B controller must differ from side A (if pre-specified)
+- Vault is an associated token account owned by the escrow PDA
 
-### `accept_duel_escrow`
-Defender deposits a matching stake into the escrow vault. Status transitions from Pending to Funded.
+### `fund_competition_side`
+Either side deposits tokens into the escrow. Used by side B (defender) to match the challenger's stake. Can also be used for incremental deposits.
 
-**Signer:** Defender
+**Signer:** Contributor
 **Constraints:**
-- Escrow must be Pending
+- Escrow must be in `PartiallyFunded` status
 - Not expired
-- Defender != Challenger (no self-duels)
-- Amount must match challenger's deposit
+- Contributor must match the side's controller
+- Deposit must not exceed the expected amount for that side (`checked_add`)
+- Side B controller is assigned on first funding if initially `Pubkey::default()` (open challenge)
+- When both sides meet their expected amounts, status transitions to `Funded`
 
-### `cancel_expired_duel`
-Permissionless refund after the duel expires without being accepted. Refunds challenger and closes the escrow account.
+### `cancel_competition_escrow`
+Refunds deposited tokens after the escrow expires without being fully funded. Closes both the escrow account and the vault.
 
-**Signer:** Anyone (permissionless)
-**Constraints:** Escrow must be Pending AND current time >= expires_at
+**Signer:** Side A controller, side B controller, or authority
+**Constraints:**
+- Escrow must be `PartiallyFunded`
+- Current time >= `expires_at`
+- Side A token account owner must match `side_a_controller` (Anchor-level constraint)
+- Side B token account owner must match `side_b_controller` OR `side_b_amount == 0` (Anchor-level)
+- Vault closed via `close_account` CPI; escrow closed via Anchor `close = caller`
 
-### `settle_duel_winner`
-Authority transfers total stake minus fee to the winner and fee to treasury. Closes the escrow account.
+### `settle_competition_winner`
+Authority transfers total stake minus fee to the winner and fee to treasury. Closes escrow + vault.
 
 **Signer:** Authority
 **Constraints:**
-- Escrow must be Funded
-- Winner must be challenger or defender
-- Winner token account must be owned by winner
-- Treasury token account must be owned by config.treasury
+- Program must not be paused
+- Escrow must be `Funded`
+- Caller must be `config.authority`
+- Winner token account owner must match the winning side's controller
+- Treasury token account owner must match `config.treasury`
+- Total computed via `checked_add`; fee via `checked_mul` + `checked_sub`
+- Vault closed; escrow closed via `close = authority`
+- Emits `CompetitionEscrowSettled` event
 
-### `refund_void_duel`
-Authority refunds both parties (draw/void). No protocol fee. Closes the escrow account.
+### `refund_competition_draw`
+Authority refunds both parties (draw/void). No protocol fee. Closes escrow + vault.
 
 **Signer:** Authority
-**Constraints:** Escrow must be Funded
+**Constraints:**
+- Program must not be paused
+- Escrow must be `Funded`
+- `side_b_controller` must not be `Pubkey::default()`
+- Side A/B token account owners must match their controllers (Anchor-level)
+- Vault closed; escrow closed via `close = authority`
 
 ### `pause_program` / `resume_program`
-Emergency controls. When paused, `create_duel_escrow` and `accept_duel_escrow` are blocked.
+Emergency controls. When paused, `create_competition_escrow`, `fund_competition_side`, `settle_competition_winner`, and `refund_competition_draw` are blocked.
 
 **Signer:** Authority
 
@@ -81,65 +114,87 @@ Fields:
   treasury:       Pubkey     (fee destination)
   fee_bps:        u16        (max 500 = 5%)
   paused:         bool
-  allowed_mints:  Vec<Pubkey> (max 4)
+  allowed_mints:  Vec<Pubkey> (max 8)
   bump:           u8
 ```
 
-### DuelEscrow
+### CompetitionEscrow
 ```
-Seeds: [b"duel", duel_id.as_bytes()]
+Seeds: [b"competition", escrow_id.as_bytes()]
 Fields:
-  duel_id:            String     (max 32 bytes)
-  challenger:         Pubkey
-  defender:           Pubkey     (default until accepted)
-  mint:               Pubkey
-  challenger_amount:  u64
-  defender_amount:    u64
-  status:             EscrowStatus (Pending/Funded/Settled/Refunded/Cancelled)
-  created_at:         i64
-  expires_at:         i64
-  winner:             Pubkey     (default until settled)
-  bump:               u8
+  escrow_id:              String              (max 32 bytes, UUID with hyphens stripped)
+  competition_kind:       CompetitionKind     (Duel | ClanWar)
+  mint:                   Pubkey
+  side_a_controller:      Pubkey              (challenger / clan leader)
+  side_b_controller:      Pubkey              (defender, Pubkey::default() until claimed)
+  expected_side_a_amount: u64
+  expected_side_b_amount: u64
+  side_a_amount:          u64                 (actual deposited)
+  side_b_amount:          u64                 (actual deposited)
+  status:                 CompetitionEscrowStatus
+  created_at:             i64
+  expires_at:             i64
+  winning_side:           u8                  (0=SideA, 1=SideB, 255=none)
+  bump:                   u8
+```
+
+### Status Enum
+```
+Pending          — reserved (not currently used)
+PartiallyFunded  — side A deposited, waiting for side B
+Funded           — both sides met expected amounts
+Settled          — winner paid, fee to treasury
+Refunded         — both sides refunded (draw/void)
+Cancelled        — expired, deposits refunded
 ```
 
 ## Events
 
 | Event | Emitted By | Key Fields |
 |---|---|---|
-| `EscrowCreated` | create_duel_escrow | duel_id, challenger, mint, amount, expires_at |
-| `EscrowAccepted` | accept_duel_escrow | duel_id, defender, amount |
-| `EscrowCancelled` | cancel_expired_duel | duel_id, challenger, refund_amount |
-| `EscrowSettled` | settle_duel_winner | duel_id, winner, winner_amount, fee_amount |
-| `EscrowRefunded` | refund_void_duel | duel_id, challenger_refund, defender_refund |
-| `ProgramPaused` | pause_program | authority |
-| `ProgramResumed` | resume_program | authority |
+| `CompetitionEscrowCreated` | create_competition_escrow | escrow_id, kind, mint, controllers, amounts, expires_at |
+| `CompetitionSideFunded` | create/fund | escrow_id, side, contributor, amount, side_total, status |
+| `CompetitionEscrowCancelled` | cancel | escrow_id, side_a_refund, side_b_refund |
+| `CompetitionEscrowSettled` | settle | escrow_id, winner_side, winner_controller, winner_amount, fee |
+| `CompetitionEscrowRefunded` | refund | escrow_id, side_a_refund, side_b_refund |
+| `ProgramPaused` | pause | authority |
+| `ProgramResumed` | resume | authority |
+| `ConfigUpdated` | update_config | authority |
 
-## Security
+## Security (Audit Findings Addressed)
 
-- Vault ownership constrained to escrow PDA on every instruction
-- Winner and treasury token accounts verified against expected owners
-- `duel_id` limited to 32 bytes to prevent PDA seed overflow
-- Accounts closed on terminal states (Settled/Refunded/Cancelled) to reclaim rent
-- `checked_add` used for total amount to prevent overflow
-- Mint validated on all token account constraints
-- `expires_at` must be in the future at creation time
-- Authority checks on settle/refund/pause/resume
+All findings from the security review have been fixed and redeployed:
+
+- **Vault ownership**: Associated token account derived from escrow PDA via `associated_token::authority = escrow` on every context
+- **Winner/treasury token accounts**: Owner validated against winning side controller and `config.treasury`
+- **Cancel/refund token accounts**: Owner constraints at Anchor struct level (not just runtime)
+- **escrow_id length**: Limited to 32 bytes; server strips UUID hyphens before PDA derivation
+- **Account closing**: All terminal states (Settled/Refunded/Cancelled) close both escrow PDA and vault, returning rent
+- **Arithmetic**: `checked_add`, `checked_mul`, `checked_sub` throughout fee/total calculations
+- **Pause enforcement**: settle and refund also check `config.paused`
+- **Side B default guard**: `refund_competition_draw` rejects `Pubkey::default()` side B
+- **Config updates**: `update_config` instruction allows treasury/fee/mints changes without redeployment
 
 ## Fee Calculation
 
 ```
-total = challenger_amount + defender_amount
-fee = total * fee_bps / 10000
-winner_amount = total - fee
+total = side_a_amount + side_b_amount         (checked_add)
+fee = total * fee_bps / 10_000                (checked_mul, integer truncation)
+winner_amount = total - fee                    (checked_sub)
 ```
 
-Integer division truncates downward, guaranteeing `winner_amount + fee <= total`.
+Fee truncates toward zero (integer division), slightly favoring the winner. This is intentional.
 
 ## Integration with Server
 
-The `EscrowClient` in `packages/arena-server/src/solana/escrow-client.ts` wraps all instructions. When `PROGRAM_ID` is not configured (dev mode), operations are no-ops that log intent. In production:
+The `EscrowClient` in `packages/arena-server/src/solana/escrow-client.ts` wraps all instructions:
 
-1. `createDuel()` calls `createDuelEscrow` after DB insert
-2. `acceptDuel()` verifies on-chain acceptance before DB update
-3. `settleDuel()` calls `settleDuelWinner` or `refundVoidDuel` via the reward distributor
-4. `expireStaleDuels()` calls `cancelExpiredDuel` for cleanup
+1. `createDuel()` → `create_competition_escrow` (server builds unsigned tx for challenger to sign)
+2. `fundSide()` → `fund_competition_side` (defender deposits via frontend signing)
+3. `settleDuel()` → `settle_competition_winner` (server signs as authority)
+4. `refundDraw()` → `refund_competition_draw` (server signs as authority)
+5. `cancelExpired()` → `cancel_competition_escrow` (permissionless after expiry)
+
+**UUID handling:** Duel IDs are UUIDs (36 chars with hyphens). The escrow client strips hyphens to produce 32 hex chars that fit the on-chain `#[max_len(32)]` constraint.
+
+**Settlement recovery:** The server uses `settlement_pending` → `settled`/`settlement_failed` escrow states. Failed settlements are logged for manual retry via admin endpoints.
