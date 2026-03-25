@@ -8,6 +8,7 @@ import { duelRouter } from './routes/duels.js';
 import { competitionRouter } from './routes/competitions.js';
 import { userRouter } from './routes/users.js';
 import { clanRouter } from './routes/clans.js';
+import { adminRouter } from './routes/admin.js';
 import { generalLimiter } from './middleware/rate-limit.js';
 import { getDb, closeDb } from './db/connection.js';
 import { startIndexerWorker, closeIndexer } from './engine/indexer.js';
@@ -15,7 +16,11 @@ import { startRewardWorker, closeRewardWorker } from './rewards/distributor.js';
 import { closeAuthRedis } from './middleware/auth.js';
 import { expireStaleDuels } from './engine/duel.js';
 import { initDiscordBot, destroyDiscordBot, postDuelChallenge, postDuelAccepted, postDuelResult } from './discord/bot.js';
-import { arenaEvents } from './adrena/integration.js';
+import { arenaEvents, setAdapter } from './adrena/integration.js';
+import { MutagenAdapterImpl } from './adrena/adapters/mutagen.js';
+import { LeaderboardAdapterImpl } from './adrena/adapters/leaderboard.js';
+import { QuestAdapterImpl } from './adrena/adapters/quest.js';
+import { StreakAdapterImpl } from './adrena/adapters/streak.js';
 
 const app = express();
 
@@ -41,6 +46,7 @@ app.use('/api/arena/duels', duelRouter);
 app.use('/api/arena/competitions', competitionRouter);
 app.use('/api/arena/users', userRouter);
 app.use('/api/arena/clans', clanRouter);
+app.use('/api/admin', adminRouter);
 
 // Challenge card image endpoint (placeholder — will be replaced with satori)
 app.get('/api/arena/challenge/:id/card.png', async (req, res) => {
@@ -156,6 +162,13 @@ async function startBackgroundJobs() {
   } catch (err) {
     console.warn('[Discord] Failed to initialize:', (err as Error).message);
   }
+
+  // Register Adrena adapters
+  setAdapter('mutagen', new MutagenAdapterImpl());
+  setAdapter('leaderboard', new LeaderboardAdapterImpl());
+  setAdapter('quest', new QuestAdapterImpl());
+  setAdapter('streak', new StreakAdapterImpl());
+  console.log('[Arena] Adrena adapters registered');
 
   // Wire arena events to Discord notifications
   arenaEvents.on('duel_created', (event) => {
