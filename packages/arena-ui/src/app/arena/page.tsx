@@ -57,6 +57,12 @@ export default function ArenaHub() {
             <Link href="/arena" className="text-arena-muted hover:text-arena-text transition-colors">
               Gauntlet
             </Link>
+            <Link href="/arena/clans" className="text-arena-muted hover:text-arena-text transition-colors">
+              Clans
+            </Link>
+            <Link href="/arena/seasons" className="text-arena-muted hover:text-arena-text transition-colors">
+              Seasons
+            </Link>
             <button
               onClick={() => connected ? undefined : setVisible(true)}
               className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-4 py-2 rounded-lg transition-colors"
