@@ -7,6 +7,7 @@ import {
   stopIndexingParticipant,
 } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
+import type { GauntletConfig } from '../db/types.js';
 import { env } from '../config.js';
 
 export class GauntletError extends Error {
@@ -88,8 +89,8 @@ export async function registerForGauntlet(
       throw new GauntletError('NOT_REGISTRABLE', 'Gauntlet not found or registration closed');
     }
 
-    const config = competition.config as any;
-    const maxParticipants = config.maxParticipants || 16;
+    const config = (typeof competition.config === 'string' ? JSON.parse(competition.config) : competition.config) as GauntletConfig;
+    const maxParticipants = config.maxParticipants ?? 16;
 
     // Check current count
     const { count } = await trx

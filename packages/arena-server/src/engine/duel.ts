@@ -1,6 +1,6 @@
 import { sql } from 'kysely';
 import { getDb } from '../db/connection.js';
-import type { DB } from '../db/types.js';
+import type { DB, DuelConfig } from '../db/types.js';
 import { scheduleDuelSettlement, startIndexingParticipant } from './indexer.js';
 import { scheduleRewardProcessing } from '../rewards/distributor.js';
 import { updateStreaks } from './streaks.js';
@@ -351,9 +351,9 @@ export async function settleDuel(duelId: string) {
     }
 
     // Parse competition config for revenge multiplier
-    const competitionConfig = typeof competition.config === 'string'
+    const competitionConfig = (typeof competition.config === 'string'
       ? JSON.parse(competition.config)
-      : competition.config;
+      : competition.config) as DuelConfig;
 
     // Create Mutagen rewards for honor duels (with streak multiplier)
     if (duel.is_honor_duel && result.winner) {

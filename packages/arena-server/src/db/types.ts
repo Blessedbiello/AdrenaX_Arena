@@ -9,6 +9,32 @@ export interface ArenaSeasonsTable {
   status: 'upcoming' | 'active' | 'completed';
 }
 
+// ── Competition Config Types ──
+export interface DuelConfig {
+  asset: string;
+  durationHours: number;
+  isRevenge?: boolean;
+  revengeMultiplier?: number;
+  originalDuelId?: string;
+}
+
+export interface GauntletConfig {
+  name: string;
+  maxParticipants: number;
+  durationHours: number;
+  rounds?: number;
+  roundDurations?: number[];
+  intermissionMinutes?: number;
+}
+
+export interface ClanWarConfig {
+  name: string;
+  durationHours: number;
+  maxClans?: number;
+}
+
+export type CompetitionConfig = DuelConfig | GauntletConfig | ClanWarConfig;
+
 // ── Arena Competitions ──
 export interface ArenaCompetitionsTable {
   id: Generated<string>;
@@ -19,7 +45,7 @@ export interface ArenaCompetitionsTable {
   end_time: ColumnType<Date, string | Date, string | Date>;
   current_round: number;
   total_rounds: number;
-  config: ColumnType<Record<string, unknown>, string | Record<string, unknown>, string | Record<string, unknown>>;
+  config: ColumnType<CompetitionConfig, string | CompetitionConfig, string | CompetitionConfig>;
   created_at: Generated<Date>;
   updated_at: Generated<Date>;
 }
