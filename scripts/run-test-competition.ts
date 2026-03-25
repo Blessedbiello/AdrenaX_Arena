@@ -50,9 +50,9 @@ async function main() {
   console.log(`API: ${API_BASE}`);
   console.log('Requires: DEV_MODE_SKIP_AUTH=true, Docker services running\n');
 
-  const alice = 'TestAlice11111111111111111111111111111111111';
-  const bob = 'TestBob111111111111111111111111111111111111111';
-  const carol = 'TestCarol1111111111111111111111111111111111111';
+  const alice = 'TestAlice1111111111111111111111111111111111';
+  const bob   = 'TestBob11111111111111111111111111111111111';
+  const carol = 'TestCarol111111111111111111111111111111111';
 
   // ── 1. Health Check ──
   console.log('1. Health Check');
