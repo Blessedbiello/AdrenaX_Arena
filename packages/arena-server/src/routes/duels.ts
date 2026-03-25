@@ -305,7 +305,7 @@ duelRouter.post('/:id/predict', requireAuth, async (req: Request, res: Response)
       return;
     }
 
-    // Check prediction window (locked in last 10% of duration)
+    // Check prediction window (locked after 50% of duration elapsed)
     const competition = await db
       .selectFrom('arena_competitions')
       .where('id', '=', duel.competition_id)
@@ -313,7 +313,7 @@ duelRouter.post('/:id/predict', requireAuth, async (req: Request, res: Response)
       .executeTakeFirstOrThrow();
 
     const totalDuration = new Date(competition.end_time).getTime() - new Date(competition.start_time).getTime();
-    const lockoutTime = new Date(competition.end_time).getTime() - totalDuration * 0.1;
+    const lockoutTime = new Date(competition.start_time).getTime() + totalDuration * 0.5;
     if (Date.now() > lockoutTime) {
       res.status(400).json({ success: false, error: 'PREDICTION_WINDOW_CLOSED' });
       return;
