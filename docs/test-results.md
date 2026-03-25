@@ -61,21 +61,40 @@ The `run-test-competition.ts` script validates 50+ checks across 17 test categor
 - [x] Production config refuses to start with DEV_MODE_SKIP_AUTH=true
 - [x] Adrena API schema validated against live data (29/29 fields)
 
-## Unit Test Results (93/93 passing)
+## Unit Test Results (128/128 passing)
 
 ```
- ✓ src/engine/__tests__/streaks.test.ts (26 tests) 9ms
- ✓ src/engine/__tests__/duel-features.test.ts (27 tests) 18ms
- ✓ src/engine/__tests__/scoring.test.ts (40 tests) 24ms
+ ✓ src/engine/__tests__/anti-sybil.test.ts  (7 tests)
+ ✓ src/engine/__tests__/gauntlet.test.ts    (8 tests)
+ ✓ src/engine/__tests__/duel-features.test.ts (27 tests)
+ ✓ src/engine/__tests__/streaks.test.ts     (26 tests)
+ ✓ src/engine/__tests__/scoring.test.ts     (53 tests)
+ ✓ src/engine/__tests__/clan.test.ts        (7 tests)
 
- Test Files  3 passed (3)
-      Tests  93 passed (93)
+ Test Files  6 passed (6)
+      Tests  128 passed (128)
 ```
 
 Test coverage:
-- **scoring.test.ts** (40 tests): tradeROI, totalROI, arenaScore, duelROI, mutagenMultiplier, duelWinner, eligibleTrades
+- **scoring.test.ts** (53 tests): tradeROI, totalROI, 4-component arenaScore, riskAdjustedReturn, consistency, duelROI, mutagenMultiplier, determineDuelWinner with volume tiebreak, eligibleTrades
 - **streaks.test.ts** (26 tests): title thresholds, multiplier formula, streak progression simulation
 - **duel-features.test.ts** (27 tests): open challenge rules, revenge windows, type filters, reward calculations, API error handling, config safety
+- **gauntlet.test.ts** (8 tests): elimination math (8->4->2->1), odd numbers, forfeits, progressive 3-round chain
+- **clan.test.ts** (7 tests): synergy bonus calculation, averaging, edge cases
+- **anti-sybil.test.ts** (7 tests): collusion score heuristics, frequency flags, even win distribution
+
+## Anchor Escrow Program (Devnet)
+
+```
+Program ID: BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ
+Cluster:    Solana Devnet
+IDL:        9aYKXk2ppRD4PJfxtA9MLtdLuMV41TwuffqQ1EZJaoKy
+```
+
+8 instructions: initialize_config, create_duel_escrow, accept_duel_escrow,
+cancel_expired_duel, settle_duel_winner, refund_void_duel, pause_program,
+resume_program. Full security audit findings addressed (vault ownership,
+winner/treasury constraints, duel_id length, account closing, checked_add).
 
 ## New Features (Sprint 3-4)
 
@@ -107,15 +126,51 @@ Test coverage:
 - Gauntlet open/results notifications
 - Graceful fallback when no bot token configured
 
+### Multi-Round Gauntlet
+- Configurable 1-5 rounds with custom durations and intermissions
+- Bottom-50% elimination per round, forfeit for 0 trades
+- Per-round snapshots and arena_score ranking
+- Round transitions with intermission scheduling
+
+### Clan Wars
+- Create/join/leave clans (max 5 members, one clan per wallet)
+- Clan rankings by war score
+- Synergy bonus: +5% per member beyond 1 (max +20%)
+- Full UI pages for clan management
+
+### Seasonal Championship
+- Season points from duels (10 pts/win), gauntlets (15-50 pts)
+- Season leaderboard endpoint
+- Admin season lifecycle management
+
+### On-Chain Escrow (Devnet)
+- Anchor program with 8 instructions for trustless staked duels
+- PDA-backed escrow vaults with SPL token transfers
+- Allowlisted mints (ADX, USDC), configurable treasury fee (max 5%)
+- Accounts closed on terminal states to reclaim rent
+- Full security audit: vault ownership, winner/treasury constraints, checked arithmetic
+
+### Admin & Integration
+- Admin API with API key auth: season CRUD, ban/unban, escrow pause/resume
+- 4 Adrena adapters registered: Mutagen, Quest, Streak, Leaderboard
+- Persistent webhooks with exponential backoff retry and dead-letter
+- Settlement snapshots for immutable audit trail
+- Pino structured logging
+
 ### Infrastructure
 - Bundled Inter fonts for Docker reliability
 - Production safety: refuse to start with dev auth bypass
 - Production warnings for localhost URLs
 - Adrena API schema validated against real data with passthrough
-- Rate limiter on revenge endpoint (3 per 5 min per wallet)
-- 93 unit tests across 3 test files
+- SSE rate limiting on duel and competition streams
+- Revenge rate limiter (3 per 5 min per wallet)
+- Anti-sybil: trade history check, collusion detection (risk score 0-100)
+- 128 unit tests across 6 test files
+- 4-component Arena Score: ROI, Win Rate, Risk-Adjusted, Consistency
 
 ## Recommendations
-- Run with real Adrena wallets on mainnet for production validation
+- Initialize ArenaConfig on devnet with treasury and allowed mints
+- Run staked duel E2E test on devnet with real SPL tokens
 - Set up monitoring for the indexer worker health
 - Add Sentry or similar for production error tracking
+- Connect Adrena adapter URLs when available
