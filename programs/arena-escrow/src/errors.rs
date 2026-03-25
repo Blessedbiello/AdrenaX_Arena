@@ -6,28 +6,30 @@ pub enum ArenaEscrowError {
     Paused,
     #[msg("Token mint is not in the allowlist")]
     InvalidMint,
-    #[msg("Duel escrow is not in Pending status")]
-    DuelNotPending,
-    #[msg("Duel escrow is not in Funded status")]
-    DuelNotFunded,
-    #[msg("Duel has not expired yet")]
-    DuelNotExpired,
-    #[msg("Duel has expired")]
-    DuelExpired,
-    #[msg("Unauthorized — only the authority can perform this action")]
+    #[msg("Escrow is not in a pending or partially funded state")]
+    EscrowNotPending,
+    #[msg("Escrow is not fully funded")]
+    EscrowNotFunded,
+    #[msg("Escrow cannot be refunded from its current state")]
+    EscrowNotRefundable,
+    #[msg("Escrow has not expired yet")]
+    EscrowNotExpired,
+    #[msg("Escrow has expired")]
+    EscrowExpired,
+    #[msg("Unauthorized")]
     Unauthorized,
     #[msg("Fee basis points exceeds maximum (500 = 5%)")]
     InvalidFee,
-    #[msg("Duel already accepted by a defender")]
-    AlreadyAccepted,
-    #[msg("Duel has already been settled")]
-    AlreadySettled,
-    #[msg("Cannot duel yourself")]
-    SelfDuel,
-    #[msg("Winner must be either the challenger or defender")]
-    InvalidWinner,
-    #[msg("Deposit amount must match challenger amount")]
-    AmountMismatch,
-    #[msg("Duel ID must be between 1 and 32 characters")]
-    InvalidDuelId,
+    #[msg("Escrow identifier must be between 1 and 32 characters")]
+    InvalidEscrowId,
+    #[msg("Side contribution exceeds the configured target amount")]
+    ContributionTooLarge,
+    #[msg("A contribution amount must be greater than zero")]
+    InvalidAmount,
+    #[msg("Winner side is invalid")]
+    InvalidWinnerSide,
+    #[msg("The contributor does not control this escrow side")]
+    InvalidSideController,
+    #[msg("Side B controller must be distinct when preconfigured")]
+    InvalidSideSetup,
 }
