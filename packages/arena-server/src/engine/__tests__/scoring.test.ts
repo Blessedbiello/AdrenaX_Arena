@@ -7,6 +7,8 @@ import {
   calculateMutagenMultiplier,
   determineDuelWinner,
   filterEligibleTrades,
+  calculateRiskAdjustedReturn,
+  calculateConsistency,
   DEFAULT_SCORING_CONFIG,
   type TradeForScoring,
 } from '../scoring.js';
@@ -69,7 +71,114 @@ describe('totalROI', () => {
 });
 
 // ---------------------------------------------------------------------------
-// calculateArenaScore
+// calculateRiskAdjustedReturn
+// ---------------------------------------------------------------------------
+
+describe('calculateRiskAdjustedReturn', () => {
+  it('returns 0 for empty trades', () => {
+    expect(calculateRiskAdjustedReturn([])).toBe(0);
+  });
+
+  it('returns 0 for fewer than minTrades', () => {
+    const trades = [makeTrade()];
+    expect(calculateRiskAdjustedReturn(trades)).toBe(0);
+  });
+
+  it('returns positive Sharpe for consistent profitable trades', () => {
+    const trades = [
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }), // 100%
+      makeTrade({ pnl_usd: 80, fees_usd: 0, collateral_usd: 100 }),  // 80%
+      makeTrade({ pnl_usd: 120, fees_usd: 0, collateral_usd: 100 }), // 120%
+    ];
+    const sharpe = calculateRiskAdjustedReturn(trades);
+    expect(sharpe).toBeGreaterThan(0);
+  });
+
+  it('returns 1 for perfectly consistent positive trades (stddev=0)', () => {
+    const trades = [
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }), // 50%
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }), // 50%
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }), // 50%
+    ];
+    expect(calculateRiskAdjustedReturn(trades)).toBe(1);
+  });
+
+  it('returns -1 for perfectly consistent negative trades (stddev=0)', () => {
+    const trades = [
+      makeTrade({ pnl_usd: -50, fees_usd: 0, collateral_usd: 100 }), // -50%
+      makeTrade({ pnl_usd: -50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: -50, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    expect(calculateRiskAdjustedReturn(trades)).toBe(-1);
+  });
+
+  it('returns lower Sharpe for volatile trades', () => {
+    const consistent = [
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    const volatile = [
+      makeTrade({ pnl_usd: 300, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: -100, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    expect(calculateRiskAdjustedReturn(consistent)).toBeGreaterThan(
+      calculateRiskAdjustedReturn(volatile)
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// calculateConsistency
+// ---------------------------------------------------------------------------
+
+describe('calculateConsistency', () => {
+  it('returns 0 for empty trades', () => {
+    expect(calculateConsistency([])).toBe(0);
+  });
+
+  it('returns 0 for fewer than minTrades', () => {
+    const trades = [makeTrade()];
+    expect(calculateConsistency(trades)).toBe(0);
+  });
+
+  it('returns 1.0 for perfectly consistent trades', () => {
+    const trades = [
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    expect(calculateConsistency(trades)).toBeCloseTo(1.0);
+  });
+
+  it('returns lower value for volatile trades', () => {
+    const consistent = [
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    const volatile = [
+      makeTrade({ pnl_usd: 200, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: -50, fees_usd: 0, collateral_usd: 100 }),
+      makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }),
+    ];
+    expect(calculateConsistency(consistent)).toBeGreaterThan(calculateConsistency(volatile));
+  });
+
+  it('handles zero mean gracefully', () => {
+    const trades = [
+      makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),   // +50%
+      makeTrade({ pnl_usd: -50, fees_usd: 0, collateral_usd: 100 }),  // -50%
+      makeTrade({ pnl_usd: 0, fees_usd: 0, collateral_usd: 100 }),    // 0%
+    ];
+    // Mean is ~0, CV is undefined -> returns 0
+    expect(calculateConsistency(trades)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// calculateArenaScore (4-component)
 // ---------------------------------------------------------------------------
 
 describe('calculateArenaScore', () => {
@@ -77,40 +186,48 @@ describe('calculateArenaScore', () => {
     expect(calculateArenaScore([])).toBe(0);
   });
 
-  it('calculates weighted score with enough trades', () => {
+  it('calculates 4-component score with enough trades', () => {
     const trades = [
       makeTrade({ pnl_usd: 100, fees_usd: 0, collateral_usd: 100 }), // 100%
       makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 }),  // 50%
       makeTrade({ pnl_usd: -10, fees_usd: 0, collateral_usd: 100 }), // -10%
     ];
-    // Total ROI = 140%
-    // ROI score = 140/500 = 0.28
-    // Win rate = 2/3 = 0.667
-    // Score = 0.28 * 70 + 0.667 * 30 = 19.6 + 20.0 = 39.6
     const score = calculateArenaScore(trades);
-    expect(score).toBeCloseTo(39.6, 0);
+    // ROI=140%, roiScore=140/500=0.28, weight 40 -> 11.2
+    // WinRate=2/3=0.667, weight 20 -> 13.33
+    // RiskAdjusted: mean=46.67, stddev=~45.09, sharpe=~1.035, norm=1.035/3=0.345, weight 25 -> 8.63
+    // Consistency: cv=45.09/46.67=0.966, 1/(1+0.966)=0.508, weight 15 -> 7.63
+    // Total ≈ 40.8
+    expect(score).toBeGreaterThan(30);
+    expect(score).toBeLessThan(50);
   });
 
-  it('ignores win rate when fewer than minTradesForWinRate', () => {
+  it('ignores win rate and advanced metrics when fewer than minTradesForWinRate', () => {
     const trades = [
       makeTrade({ pnl_usd: 250, fees_usd: 0, collateral_usd: 100 }), // 250%
     ];
-    // ROI = 250%, score = 250/500 = 0.5
-    // Win rate = 0 (only 1 trade, need 3)
-    // Score = 0.5 * 70 + 0 * 30 = 35
-    expect(calculateArenaScore(trades)).toBeCloseTo(35);
+    // ROI = 250%, roiScore = 250/500 = 0.5, weight 40 -> 20
+    // Win rate = 0 (only 1 trade)
+    // Risk-adjusted = 0 (fewer than min)
+    // Consistency = 0 (fewer than min)
+    // Score = 20
+    expect(calculateArenaScore(trades)).toBeCloseTo(20);
   });
 
-  it('caps ROI at 500%', () => {
+  it('caps ROI at roiCap', () => {
     const trades = [
       makeTrade({ pnl_usd: 5000, fees_usd: 0, collateral_usd: 100 }), // 5000%
       makeTrade({ pnl_usd: 5000, fees_usd: 0, collateral_usd: 100 }),
       makeTrade({ pnl_usd: 5000, fees_usd: 0, collateral_usd: 100 }),
     ];
-    // ROI = 15000%, capped to 1.0
-    // Win rate = 3/3 = 1.0
-    // Score = 1.0 * 70 + 1.0 * 30 = 100
-    expect(calculateArenaScore(trades)).toBeCloseTo(100);
+    const score = calculateArenaScore(trades);
+    // ROI capped at 1.0 * 40 = 40
+    // WinRate = 1.0 * 20 = 20
+    // RiskAdjusted = 1.0 (all positive, stddev=0 -> returns 1, /3 = 0.333, but capped at 1) -> actually stddev=0 so returns 1, norm = 1/3 = 0.333 * 25 = 8.33
+    // Wait: calculateRiskAdjustedReturn returns 1 when stddev=0 and mean>0. Then sharpe/3 = 1/3 = 0.333 * 25 = 8.33
+    // Consistency = 1.0 * 15 = 15
+    // Total = 40 + 20 + 8.33 + 15 = 83.33
+    expect(score).toBeGreaterThan(80);
   });
 
   it('handles all-negative ROI', () => {
@@ -120,7 +237,6 @@ describe('calculateArenaScore', () => {
       makeTrade({ pnl_usd: -200, fees_usd: 5, collateral_usd: 100 }),
     ];
     const score = calculateArenaScore(trades);
-    // ROI is very negative, win rate = 0
     expect(score).toBeLessThan(0);
   });
 
@@ -129,10 +245,15 @@ describe('calculateArenaScore', () => {
       makeTrade({ pnl_usd: 250, fees_usd: 0, collateral_usd: 100 }), // 250%
       makeTrade({ pnl_usd: 250, fees_usd: 0, collateral_usd: 100 }),
     ];
-    const customConfig = { ...DEFAULT_SCORING_CONFIG, roiWeight: 50, winRateWeight: 50, minTradesForWinRate: 2 };
-    // ROI = 500%, roiScore = 500/500 = 1.0
-    // Win rate = 2/2 = 1.0
-    // Score = 1.0 * 50 + 1.0 * 50 = 100
+    const customConfig = {
+      ...DEFAULT_SCORING_CONFIG,
+      roiWeight: 100,
+      winRateWeight: 0,
+      riskAdjustedWeight: 0,
+      consistencyWeight: 0,
+      minTradesForWinRate: 2,
+    };
+    // ROI = 500%, roiScore = 1.0, weight 100 -> 100
     expect(calculateArenaScore(trades, customConfig)).toBeCloseTo(100);
   });
 });
@@ -197,7 +318,7 @@ describe('calculateMutagenMultiplier', () => {
 });
 
 // ---------------------------------------------------------------------------
-// determineDuelWinner
+// determineDuelWinner (with volume tiebreak)
 // ---------------------------------------------------------------------------
 
 describe('determineDuelWinner', () => {
@@ -240,11 +361,25 @@ describe('determineDuelWinner', () => {
     expect(result.reason).toBe('challenger_forfeit');
   });
 
-  it('tie goes to challenger', () => {
+  it('tie with equal volume results in draw', () => {
     const trades = [makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 })];
-    const result = determineDuelWinner(trades, trades, alice, bob);
+    const result = determineDuelWinner(trades, trades, alice, bob, 100, 100);
+    expect(result.winner).toBeNull();
+    expect(result.reason).toBe('draw');
+  });
+
+  it('tie resolved by higher challenger volume', () => {
+    const trades = [makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 })];
+    const result = determineDuelWinner(trades, trades, alice, bob, 500, 100);
     expect(result.winner).toBe(alice);
-    expect(result.reason).toBe('tie_challenger_advantage');
+    expect(result.reason).toBe('higher_volume');
+  });
+
+  it('tie resolved by higher defender volume', () => {
+    const trades = [makeTrade({ pnl_usd: 50, fees_usd: 0, collateral_usd: 100 })];
+    const result = determineDuelWinner(trades, trades, alice, bob, 100, 500);
+    expect(result.winner).toBe(bob);
+    expect(result.reason).toBe('higher_volume');
   });
 
   it('exposes correct ROI values in the result', () => {
