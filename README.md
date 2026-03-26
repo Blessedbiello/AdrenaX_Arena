@@ -4,6 +4,8 @@
 
 A full-featured competition layer for [Adrena](https://adrena.xyz), the Solana perpetual DEX. Challenge any trader to a head-to-head duel, survive progressive elimination in The Gauntlet, rally your clan for team-based wars, and climb the seasonal championship ranks -- all scored from real trades on Adrena's live markets, with trustless staked escrow on-chain.
 
+### [▶ Watch the Demo (3 min)](https://www.loom.com/share/bc7e65555e3a43a6bb3442525aa12538)
+
 > **Escrow Program (Devnet):** `BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ`
 > Built with Anchor 0.30.1 -- 9 instructions, security-audited, rent-reclaimable accounts.
 
