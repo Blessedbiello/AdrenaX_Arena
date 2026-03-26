@@ -1,0 +1,5 @@
+{
+  "installCommand": "cd ../.. && pnpm install --filter arena-ui...",
+  "buildCommand": "pnpm build",
+  "framework": "nextjs"
+}
