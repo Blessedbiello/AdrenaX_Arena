@@ -2,12 +2,25 @@
 
 **Competitive trading duels, tournaments, and clan wars on Solana.**
 
-A full-featured competition layer for [Adrena](https://adrena.xyz), the Solana perpetual DEX. Challenge any trader to a head-to-head duel, survive progressive elimination in The Gauntlet, rally your clan for team-based wars, and climb the seasonal championship ranks -- all scored from real trades on Adrena's live markets, with trustless staked escrow on-chain.
+[![Watch the Demo](https://img.shields.io/badge/Demo_Video-Watch_3_min-00d4aa?style=for-the-badge&logo=loom)](https://www.loom.com/share/bc7e65555e3a43a6bb3442525aa12538)
 
-### [▶ Watch the Demo (3 min)](https://www.loom.com/share/bc7e65555e3a43a6bb3442525aa12538)
+A full-featured competition layer for [Adrena](https://adrena.xyz), the Solana perpetual DEX. Challenge any trader to a head-to-head duel, survive progressive elimination in The Gauntlet, rally your clan for team-based wars, and climb the seasonal championship ranks -- all scored from real trades on Adrena's live markets, with trustless staked escrow on-chain.
 
 > **Escrow Program (Devnet):** `BQQnoKSbNBVjFuiGB33QWymz6PhczDmRFmeLMJ3MGvwQ`
 > Built with Anchor 0.30.1 -- 9 instructions, security-audited, rent-reclaimable accounts.
+
+### Screenshots
+
+<table>
+<tr>
+<td><img src="docs/screenshots/arena-hub.png" alt="Arena Hub" width="400"/><br/><b>Arena Hub</b> — Live duels, open challenges, how it works</td>
+<td><img src="docs/screenshots/duel-battle.png" alt="Duel Battle" width="400"/><br/><b>Duel Battle</b> — Live ROI comparison, predictions, streaks</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/leaderboard.png" alt="Leaderboard" width="400"/><br/><b>Leaderboard</b> — Weekly/monthly/all-time with medal styling</td>
+<td><img src="docs/screenshots/clans.png" alt="Clans" width="400"/><br/><b>Clans</b> — Team rankings, war history, member management</td>
+</tr>
+</table>
 
 ---
 
@@ -107,30 +120,26 @@ The server polls Adrena's public API for position data. Competition logic runs o
 **Prerequisites:** Node.js 20+, pnpm, Docker
 
 ```bash
-# Clone
-git clone https://github.com/your-org/AdrenaX_Arena.git
+git clone https://github.com/Blessedbiello/AdrenaX_Arena.git
 cd AdrenaX_Arena
-
-# Install dependencies
-pnpm install
-
-# Start PostgreSQL and Redis
-docker compose up -d
-
-# Copy environment config
 cp .env.example .env
-
-# Run database migrations (10 migrations, 18 tables)
+pnpm install
+docker compose up -d
 pnpm db:migrate
-
-# Start dev servers (API on :3000, UI on :3001)
 pnpm dev
+```
 
-# Verify
+Open **http://localhost:3001/arena** and you're in.
+
+```bash
+# Verify the API
 curl http://localhost:3000/api/health
 
 # Run tests (132 tests across 7 files)
 pnpm test
+
+# Run full competition with 6 real Solana wallets (115/115 checks)
+pnpm --filter arena-server exec npx tsx ../../scripts/run-full-competition.ts
 ```
 
 **Create a test duel** (requires wallet auth -- use the UI at `http://localhost:3001`):

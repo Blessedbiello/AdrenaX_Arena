@@ -1,0 +1,6 @@
+{
+  "buildCommand": "cd packages/arena-ui && pnpm build",
+  "outputDirectory": "packages/arena-ui/.next",
+  "installCommand": "pnpm install",
+  "framework": "nextjs"
+}

@@ -11,3 +11,4 @@ coverage/
 # Anchor build artifacts
 target/
 .anchor/
+.vercel

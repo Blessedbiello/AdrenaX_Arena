@@ -903,16 +903,19 @@ async function phase10Profiles(): Promise<void> {
   sectionHeader(10, 'User Profiles & Streak Data');
 
   for (const [name, wallet] of Object.entries(WALLETS)) {
+    await sleep(500); // Stagger requests to avoid rate limiting
     const profileRes = await api(`/api/arena/users/${wallet}/profile`);
     check(`${name} profile fetched`, profileRes.success === true);
     check(`${name} has duel stats`, profileRes.data?.duels?.total !== undefined);
 
+    await sleep(500);
     const streakRes = await api(`/api/arena/users/${wallet}/streak`);
     check(`${name} streak endpoint responds`, streakRes.success === true);
     check(`${name} has current_streak field`, streakRes.data?.current_streak !== undefined);
     check(`${name} has total_wins field`, streakRes.data?.total_wins !== undefined);
   }
 
+  await sleep(500);
   // Season pass for SolWarrior
   const passRes = await api(`/api/arena/season/pass/${WALLETS.SolWarrior}`);
   check('SolWarrior season pass fetched', passRes.success === true);
@@ -1052,6 +1055,8 @@ async function main(): Promise<void> {
     console.error('\n  [Phase 9 error]', (err as Error).message);
     failed++;
   }
+
+  await sleep(30000); // Wait for rate limit window to reset before profile checks
 
   try {
     await phase10Profiles();
