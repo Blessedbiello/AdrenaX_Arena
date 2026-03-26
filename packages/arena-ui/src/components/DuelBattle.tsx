@@ -65,12 +65,12 @@ export default function DuelBattle({ details }: { details: DuelDetails }) {
           {challenger && (
             <div className="space-y-2">
               <div className={`text-3xl font-bold ${
-                challenger.roi_percent >= 0 ? 'text-arena-accent' : 'text-arena-red'
+                Number(challenger.roi_percent) >= 0 ? 'text-arena-accent' : 'text-arena-red'
               }`}>
-                {challenger.roi_percent >= 0 ? '+' : ''}{challenger.roi_percent.toFixed(2)}%
+                {Number(challenger.roi_percent) >= 0 ? '+' : ''}{Number(challenger.roi_percent).toFixed(2)}%
               </div>
               <div className="text-sm text-arena-muted">
-                PnL: ${challenger.pnl_usd.toFixed(2)} | Trades: {challenger.positions_closed}
+                PnL: ${Number(challenger.pnl_usd).toFixed(2)} | Trades: {challenger.positions_closed}
               </div>
             </div>
           )}
@@ -106,12 +106,12 @@ export default function DuelBattle({ details }: { details: DuelDetails }) {
           {defender && (
             <div className="space-y-2">
               <div className={`text-3xl font-bold ${
-                defender.roi_percent >= 0 ? 'text-arena-accent' : 'text-arena-red'
+                Number(defender.roi_percent) >= 0 ? 'text-arena-accent' : 'text-arena-red'
               }`}>
-                {defender.roi_percent >= 0 ? '+' : ''}{defender.roi_percent.toFixed(2)}%
+                {Number(defender.roi_percent) >= 0 ? '+' : ''}{Number(defender.roi_percent).toFixed(2)}%
               </div>
               <div className="text-sm text-arena-muted">
-                PnL: ${defender.pnl_usd.toFixed(2)} | Trades: {defender.positions_closed}
+                PnL: ${Number(defender.pnl_usd).toFixed(2)} | Trades: {defender.positions_closed}
               </div>
             </div>
           )}
