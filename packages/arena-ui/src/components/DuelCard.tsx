@@ -4,6 +4,16 @@ import Link from 'next/link';
 import type { Duel } from '../lib/types';
 import CountdownTimer from './CountdownTimer';
 
+const ASSET_ICONS: Record<string, string> = {
+  SOL: '\u25CE',
+  BTC: '\u20BF',
+  ETH: '\u039E',
+  BONK: '\uD83D\uDC15',
+  JTO: '\u26A1',
+  JITOSOL: '\u25CE',
+  ANY: '\uD83C\uDF10',
+};
+
 function shortenPubkey(key: string): string {
   return `${key.slice(0, 4)}...${key.slice(-4)}`;
 }
@@ -25,10 +35,10 @@ export default function DuelCard({ duel }: { duel: Duel }) {
 
   return (
     <Link href={`/arena/duels/${duel.id}`}>
-      <div className="bg-arena-card border border-arena-border rounded-xl p-5 hover:border-arena-accent/50 transition-colors cursor-pointer">
+      <div className="bg-arena-card border border-arena-border rounded-xl p-5 hover:border-arena-accent/50 hover:scale-[1.02] transition-all cursor-pointer">
         <div className="flex justify-between items-start mb-4">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold">{duel.asset_symbol}</span>
+            <span className="text-lg font-bold">{ASSET_ICONS[duel.asset_symbol] || '\uD83D\uDCCA'} {duel.asset_symbol}</span>
             <span className={`text-sm ${statusColor(duel.status)} uppercase font-medium`}>
               {duel.status}
             </span>
@@ -41,8 +51,8 @@ export default function DuelCard({ duel }: { duel: Duel }) {
             <div className="text-xs text-arena-muted mb-1">Challenger</div>
             <div className="font-mono text-sm">{shortenPubkey(duel.challenger_pubkey)}</div>
             {duel.challenger_roi != null && (
-              <div className={`text-sm font-bold mt-1 ${duel.challenger_roi >= 0 ? 'text-arena-accent' : 'text-arena-red'}`}>
-                {duel.challenger_roi >= 0 ? '+' : ''}{duel.challenger_roi.toFixed(2)}%
+              <div className={`text-sm font-bold mt-1 ${Number(duel.challenger_roi) >= 0 ? 'text-arena-accent' : 'text-arena-red'}`}>
+                {Number(duel.challenger_roi) >= 0 ? '+' : ''}{Number(duel.challenger_roi).toFixed(2)}%
               </div>
             )}
           </div>
@@ -55,15 +65,15 @@ export default function DuelCard({ duel }: { duel: Duel }) {
               {duel.defender_pubkey
                 ? shortenPubkey(duel.defender_pubkey)
                 : duel.status === 'pending'
-                  ? <span className="text-arena-accent font-bold">OPEN</span>
+                  ? <span className="text-arena-accent font-bold animate-pulse">OPEN</span>
                   : 'Awaiting...'}
             </div>
             {!duel.defender_pubkey && duel.status === 'pending' && (
               <div className="text-xs text-arena-accent mt-1">Anyone can accept</div>
             )}
             {duel.defender_roi != null && (
-              <div className={`text-sm font-bold mt-1 ${duel.defender_roi >= 0 ? 'text-arena-accent' : 'text-arena-red'}`}>
-                {duel.defender_roi >= 0 ? '+' : ''}{duel.defender_roi.toFixed(2)}%
+              <div className={`text-sm font-bold mt-1 ${Number(duel.defender_roi) >= 0 ? 'text-arena-accent' : 'text-arena-red'}`}>
+                {Number(duel.defender_roi) >= 0 ? '+' : ''}{Number(duel.defender_roi).toFixed(2)}%
               </div>
             )}
           </div>

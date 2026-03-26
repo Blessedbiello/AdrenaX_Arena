@@ -54,7 +54,7 @@ export default function ArenaHub() {
             <Link href="/arena/duels" className="text-arena-muted hover:text-arena-text transition-colors">
               Duels
             </Link>
-            <Link href="/arena" className="text-arena-muted hover:text-arena-text transition-colors">
+            <Link href="/arena/gauntlet" className="text-arena-muted hover:text-arena-text transition-colors">
               Gauntlet
             </Link>
             <Link href="/arena/clans" className="text-arena-muted hover:text-arena-text transition-colors">
@@ -63,6 +63,14 @@ export default function ArenaHub() {
             <Link href="/arena/seasons" className="text-arena-muted hover:text-arena-text transition-colors">
               Seasons
             </Link>
+            <Link href="/arena/leaderboard" className="text-arena-muted hover:text-arena-text transition-colors">
+              Leaderboard
+            </Link>
+            {connected && (
+              <Link href="/arena/profile" className="text-arena-muted hover:text-arena-text transition-colors">
+                Profile
+              </Link>
+            )}
             <button
               onClick={() => connected ? undefined : setVisible(true)}
               className="bg-arena-accent hover:bg-arena-accent/80 text-arena-bg font-bold px-4 py-2 rounded-lg transition-colors"
@@ -92,6 +100,25 @@ export default function ArenaHub() {
             >
               Challenge Someone
             </Link>
+          </div>
+        </div>
+
+        {/* How It Works */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-10">
+          <div className="bg-arena-card border border-arena-border rounded-xl p-6 text-center">
+            <div className="text-3xl mb-3">{'\u2694'}</div>
+            <h3 className="font-bold mb-1">1. Challenge</h3>
+            <p className="text-sm text-arena-muted">Pick an opponent, choose an asset and duration. Share your challenge card.</p>
+          </div>
+          <div className="bg-arena-card border border-arena-border rounded-xl p-6 text-center">
+            <div className="text-3xl mb-3">{'\uD83D\uDCC8'}</div>
+            <h3 className="font-bold mb-1">2. Trade</h3>
+            <p className="text-sm text-arena-muted">Trade on Adrena during the window. Best ROI wins — skill over capital.</p>
+          </div>
+          <div className="bg-arena-card border border-arena-border rounded-xl p-6 text-center">
+            <div className="text-3xl mb-3">{'\uD83C\uDFC6'}</div>
+            <h3 className="font-bold mb-1">3. Win</h3>
+            <p className="text-sm text-arena-muted">Winner takes the stakes. Build streaks, earn titles, climb the leaderboard.</p>
           </div>
         </div>
 

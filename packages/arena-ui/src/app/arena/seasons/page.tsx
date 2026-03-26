@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { api } from '../../../lib/api';
+import { useWalletAuth } from '../../../hooks/useWalletAuth';
 import type { Season, SeasonStanding } from '../../../lib/types';
 
 function shortenPubkey(key: string): string {
@@ -10,6 +11,7 @@ function shortenPubkey(key: string): string {
 }
 
 export default function SeasonsPage() {
+  const { walletAddress, connected } = useWalletAuth();
   const [season, setSeason] = useState<Season | null>(null);
   const [leaderboard, setLeaderboard] = useState<SeasonStanding[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,7 +38,7 @@ export default function SeasonsPage() {
     <div className="min-h-screen bg-arena-bg">
       <header className="border-b border-arena-border">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Link href="/arena" className="text-arena-muted hover:text-arena-text">← Arena</Link>
+          <Link href="/arena" className="text-arena-muted hover:text-arena-text">&larr; Arena</Link>
           <h1 className="text-xl font-bold">Seasonal Championship</h1>
         </div>
       </header>
@@ -77,16 +79,27 @@ export default function SeasonsPage() {
                 </tr>
               </thead>
               <tbody>
-                {leaderboard.map((entry, i) => (
-                  <tr key={entry.user_pubkey} className="border-b border-arena-border last:border-0">
-                    <td className="py-3 px-4 font-bold">{i + 1}</td>
-                    <td className="py-3 px-4 font-mono">{shortenPubkey(entry.user_pubkey)}</td>
-                    <td className="py-3 px-4 text-right">{entry.duel_points}</td>
-                    <td className="py-3 px-4 text-right">{entry.gauntlet_points}</td>
-                    <td className="py-3 px-4 text-right">{entry.clan_points}</td>
-                    <td className="py-3 px-4 text-right font-bold text-arena-gold">{entry.total_points}</td>
-                  </tr>
-                ))}
+                {leaderboard.map((entry, i) => {
+                  const isCurrentUser = connected && walletAddress === entry.user_pubkey;
+                  return (
+                    <tr
+                      key={entry.user_pubkey}
+                      className={`border-b border-arena-border last:border-0 ${isCurrentUser ? 'bg-arena-accent/10' : ''}`}
+                    >
+                      <td className="py-3 px-4 font-bold">
+                        {i + 1 === 1 ? '\uD83E\uDD47' : i + 1 === 2 ? '\uD83E\uDD48' : i + 1 === 3 ? '\uD83E\uDD49' : i + 1}
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        {shortenPubkey(entry.user_pubkey)}
+                        {isCurrentUser && <span className="ml-2 text-arena-accent text-xs font-bold">(You)</span>}
+                      </td>
+                      <td className="py-3 px-4 text-right">{entry.duel_points}</td>
+                      <td className="py-3 px-4 text-right">{entry.gauntlet_points}</td>
+                      <td className="py-3 px-4 text-right">{entry.clan_points}</td>
+                      <td className="py-3 px-4 text-right font-bold text-arena-gold">{entry.total_points}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
